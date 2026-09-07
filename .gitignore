@@ -1,2 +1,4 @@
 # Local Pi runtime state
 .atl/
+.pi/
+openspec/
