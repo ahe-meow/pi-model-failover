@@ -109,7 +109,8 @@ Each `test/<layer>/<module>.spec.ts` mirrors `src/<layer>/<module>.ts`. Phases a
     "@earendil-works/pi-tui": "*"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2",
+    "@biomejs/biome": "2.5.12",
+    "@types/node": "^22",
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
     "typescript": "^5",
@@ -137,11 +138,11 @@ Pi loads extensions as TypeScript source (`pi -e ./src/index.ts`, and packages i
 
 ```json
 {
-  "$schema": "https://biomejs.dev/schemas/2.0.0/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.5.12/schema.json",
   "formatter": { "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },
-  "linter": { "rules": { "recommended": true, "suspicious": { "noExplicitAny": "error" } } },
+  "linter": { "rules": { "preset": "recommended", "suspicious": { "noExplicitAny": "error" } } },
   "javascript": { "formatter": { "quoteStyle": "double", "semicolons": "always" } },
-  "files": { "ignore": ["node_modules", ".scratch", ".atl", ".pi", "openspec"] }
+  "files": { "includes": ["**", "!!node_modules", "!!.scratch", "!!.atl", "!!.pi", "!!openspec"] }
 }
 ```
 

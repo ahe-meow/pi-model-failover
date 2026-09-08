@@ -58,6 +58,7 @@ Rules every task, subagent, and reviewer applies. Vocabulary: `CONTEXT.md`.
 ## Subagent and review discipline
 
 - Single writer: at most one `gentle-ai-worker` writes at a time, each with an explicit allowed edit surface. Parallel writers only in separate git worktrees approved by the user.
+- Workflow execution uses a progress-based timeout: leave subagent task-timeout fields unset; classify a subagent as timed out only after more than five minutes without observable step progress. Ongoing tool activity or verifiable progress resets the window; inspect workflow status at the threshold before recovery.
 - Review budget: 400 changed lines per work unit. Split tasks that would exceed it.
 - `gentle-ai-verify` runs `npm test`, `npx tsc --noEmit`, `npx biome check .` after every work unit. A red result blocks the next unit.
 - Tasks live as markdown under `.scratch/<phase>/` (see `docs/agents/issue-tracker.md`).

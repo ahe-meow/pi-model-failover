@@ -2,3 +2,8 @@
 .atl/
 .pi/
 openspec/
+node_modules/
+*.tgz
+.vitest/
+coverage/
+*.log

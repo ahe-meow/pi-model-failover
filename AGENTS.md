@@ -15,6 +15,7 @@
 - Source modules ≤ 400 lines; user-visible strings only in `src/strings.ts`; secrets always through `redactSecret`.
 - Strict TDD with vitest: failing test first, then implementation. Verify with `npm run check`.
 - One writer at a time, explicit edit surfaces, 400 changed lines per work unit.
+- Subagent execution uses a progress-based timeout: leave subagent task-timeout fields unset; classify a subagent as timed out only after more than five minutes without observable step progress. Ongoing tool activity or verifiable progress resets the five-minute window. At the threshold, inspect workflow status before pausing, stopping, resuming, or rerouting.
 - Commits, pushes, and publishing are the user's actions.
 
 ## Agent skills

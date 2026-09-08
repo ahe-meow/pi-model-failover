@@ -57,7 +57,7 @@ Expected: `node_modules/` created, no `ERESOLVE` errors. If the `@earendil-works
 ```ts
 // test/fakes/memoryFs.spec.ts
 import { describe, expect, it } from "vitest";
-import { MemoryFs } from "./memoryFs";
+import { MemoryFs } from "./memoryFs.js";
 
 describe("MemoryFs", () => {
   it("writeAtomic stores text and records mode", async () => {
@@ -82,13 +82,13 @@ describe("MemoryFs", () => {
 - [ ] **Step 5: Run test to verify it fails**
 
 Run: `npx vitest run test/fakes/memoryFs.spec.ts`
-Expected: FAIL, `Cannot find module './memoryFs'`.
+Expected: FAIL, `Cannot find module './memoryFs.js'`.
 
 - [ ] **Step 6: Write the fakes**
 
 ```ts
 // test/fakes/memoryFs.ts
-import type { FileSystem } from "../../src/domain/ports";
+import type { FileSystem } from "../../src/domain/ports.js";
 
 export class MemoryFs implements FileSystem {
   files = new Map<string, string>();
@@ -111,7 +111,7 @@ export class MemoryFs implements FileSystem {
 
 ```ts
 // test/fakes/fakeClock.ts
-import type { Clock } from "../../src/domain/ports";
+import type { Clock } from "../../src/domain/ports.js";
 
 export class FakeClock implements Clock {
   private t = 0;
@@ -145,8 +145,8 @@ Expected: typecheck OK, biome OK, 3 tests pass.
 - [ ] **Step 9: Commit (parent runs)**
 
 ```bash
-git -c safe.directory='/storage/emulated/0/AI Workplace/pi-model-auto-switch' add package.json tsconfig.json biome.json vitest.config.ts LICENSE .gitignore src/domain test/fakes
-git -c safe.directory='/storage/emulated/0/AI Workplace/pi-model-auto-switch' commit -m "chore: package skeleton, ports, test fakes"
+git -c safe.directory='/mnt/sdcard/AI Workplace/pi-model-auto-switch' add package.json tsconfig.json biome.json vitest.config.ts LICENSE .gitignore src/domain test/fakes
+git -c safe.directory='/mnt/sdcard/AI Workplace/pi-model-auto-switch' commit -m "chore: package skeleton, ports, test fakes"
 ```
 
 ---
@@ -167,7 +167,7 @@ git -c safe.directory='/storage/emulated/0/AI Workplace/pi-model-auto-switch' co
 
 ```ts
 import { describe, expect, it } from "vitest";
-import { WriteQueue } from "../../src/config/writeQueue";
+import { WriteQueue } from "../../src/config/writeQueue.js";
 
 describe("WriteQueue", () => {
   it("runs tasks in enqueue order", async () => {
@@ -236,9 +236,9 @@ Expected: PASS, 3 tests.
 
 ```ts
 import { describe, expect, it } from "vitest";
-import { JsonStore } from "../../src/config/jsonStore";
-import { WriteQueue } from "../../src/config/writeQueue";
-import { MemoryFs } from "../fakes/memoryFs";
+import { JsonStore } from "../../src/config/jsonStore.js";
+import { WriteQueue } from "../../src/config/writeQueue.js";
+import { MemoryFs } from "../fakes/memoryFs.js";
 
 type Doc = { version: number; a: number };
 const make = (fs: MemoryFs, migrations = {}) =>
@@ -284,8 +284,8 @@ Expected: FAIL, `Cannot find module`.
 
 ```ts
 // src/config/jsonStore.ts
-import type { FileSystem } from "../domain/ports";
-import type { WriteQueue } from "./writeQueue";
+import type { FileSystem } from "../domain/ports.js";
+import type { WriteQueue } from "./writeQueue.js";
 
 export type LoadStatus = "ok" | "missing" | "corrupt" | "newer-version" | "migrated";
 export interface StoreOptions<T> {
