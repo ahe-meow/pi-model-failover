@@ -74,7 +74,7 @@ export interface ModelNode {
   api?: ApiType;
   baseUrl?: string;
   reasoning: boolean;
-  thinkingLevelMap?: Record<string, string>;
+  thinkingLevelMap?: Record<string, string | null>;
   input: ("text" | "image")[];
   contextWindow: number;
   maxTokens: number;
@@ -85,10 +85,10 @@ export interface ModelNode {
 }
 export interface ProviderNode {
   name: string;
-  baseUrl: string;
-  api: ApiType;
+  baseUrl?: string;
+  api?: ApiType;
   apiKey?: string;
-  authHeader?: string;
+  authHeader?: boolean;
   headers?: Record<string, string>;
   compat?: Record<string, unknown>;
   modelOverrides?: Record<string, unknown>;
