@@ -113,7 +113,7 @@ export class ModelManagerTab implements TabComponent {
       return this.waitForPending();
     }
     if (this.screen === "form") {
-      if (isKey(data, Key.escape)) this.formBack?.();
+      if (isKey(data, Key.escape) && !this.form?.isEditing?.()) this.formBack?.();
       else return this.form?.handleInput(data);
       return;
     }

@@ -18,8 +18,7 @@ import type { ModelManagerDeps } from "../modelManager.js";
 
 const M = S.modelManager;
 const { providerForm: P, modelForm: F, catalog: C } = M;
-const E = String(),
-  N = String.fromCharCode(10);
+const E = String();
 export const CATALOG_HEADERS = {
   catalog: (count: number) => C.header(count),
   "endpoint-provider": () => C.endpointProviderHeader,
@@ -119,7 +118,7 @@ class FormView implements TabComponent {
   private pending = Promise.resolve();
   private readonly form: Form;
   constructor(
-    private readonly fields: Field[],
+    fields: Field[],
     private readonly title: string,
     notify: (message: string) => void,
     failure: string,
@@ -140,10 +139,11 @@ class FormView implements TabComponent {
     ...fitCatalogBody(this.form.render(width), width, rows, this.form.focus),
   ];
   handleInput(data: string): void | Promise<void> {
-    const field = this.fields[this.form.focus];
-    if (field?.kind === "text" && field.multiline && /^[\r\n]$/.test(data)) field.value += N;
-    else this.form.handleInput(data);
+    this.form.handleInput(data);
     return this.pending;
+  }
+  isEditing(): boolean {
+    return this.form.isEditing();
   }
   hints = (): Array<[string, string]> => S.hints.form;
   helpTitle = (): string => this.title;
