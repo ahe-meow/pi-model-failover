@@ -11,8 +11,9 @@ export class MemoryFs implements FileSystem {
   }
 
   async writeAtomic(p: string, data: string, mode: number) {
+    const existingMode = this.files.has(p) ? (this.modes.get(p) ?? mode) : mode;
     this.files.set(p, data);
-    this.modes.set(p, mode);
+    this.modes.set(p, existingMode);
     this.mtimes.set(p, this.now);
   }
 

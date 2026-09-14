@@ -42,10 +42,8 @@ export const S = {
   emptyList: "Nothing here yet",
   history: {
     header: "When  Chain  From  To  Reason  ms",
-    headerDropped: (count: number) => `When  Chain  From  To  Reason  ms  (${count} dropped)`,
+    dropped: (count: number) => `(${count} dropped)`,
     detailHeader: "Event details",
-    row: (when: string, chain: string, from: string, to: string, reason: string, elapsed: number) =>
-      `${when}  ${chain}  ${from}  ${to}  ${reason}  ${elapsed}`,
     none: "-",
     reset: "reset",
     unknownTime: "unknown time",
@@ -57,6 +55,7 @@ export const S = {
   },
   modelManager: {
     providerHeader: "Provider  API  Models  Mult  Owner",
+    modelHeader: "Model  ctx  max  reasoning",
     keyLabel: "key",
     missingKey: "-",
     contextLabel: "ctx",
@@ -139,10 +138,11 @@ export const S = {
     actions: {
       deleteProviderTitle: (id: string) => `Delete provider ${id}?`,
       deleteProviderDetails: "Only the provider node will be removed",
-      deleteProviderAffected: (names: string[]) =>
-        names.length === 0
-          ? "No Chains reference this provider"
-          : `It is a target in ${names.length} Chain${names.length === 1 ? "" : "s"}: ${names.join(", ")}`,
+      deleteProviderAffected: (names: string[]) => {
+        if (names.length === 0) return "No Chains reference this provider";
+        const plural = names.length === 1 ? "" : "s";
+        return `It is a target in ${names.length} Chain${plural}: ${names.join(", ")}`;
+      },
       deleteProviderCleanup: "Affected Chain targets and Virtual Models will be updated",
       removeModelsTitle: (count: number) =>
         `Remove ${count} Provider Model${count === 1 ? "" : "s"}?`,
@@ -154,6 +154,8 @@ export const S = {
     catalog: {
       title: "Catalog",
       header: (count: number) => `Catalog (${count})`,
+      tableHeader: "Model  Name  ctx  max  reasoning  vision",
+      providerHeader: "Provider  URL  API  key",
       endpointProviderHeader: "Endpoint providers",
       endpointModelsHeader: "Endpoint models",
       builtinHeader: "Pi built-in models",
@@ -180,23 +182,12 @@ export const S = {
   },
   chains: {
     listHeader: "Chain  Targets  First target  Status",
+    targetHeader: "#  Target  Mult  Mode  Retries  TTFT  Status",
     detailHeader: (id: string, virtualId: string, details: string) =>
       `${id} → ${virtualId}  ${details}`,
     virtualId: (id: string) => `failover/${id}`,
     virtualDetails: (contextWindow: number, reasoning: string, input: string) =>
       `ctx ${contextWindow}  reasoning ${reasoning}  input ${input}`,
-    chainRow: (id: string, count: number, first: string, status: string) =>
-      `${id}  ${count}  ${first}  ${status}`,
-    targetRow: (
-      index: number,
-      ref: string,
-      multiplier: string,
-      mode: string,
-      retries: number,
-      ttft: number,
-      action: string,
-      status: string,
-    ) => `${index} ${ref}  ${multiplier}x  ${mode}  r${retries}  ttft${ttft}/${action}  ${status}`,
     noTarget: "-",
     notRegistered: "not registered",
     reasoning: { yes: "yes", no: "-" },
@@ -271,8 +262,10 @@ export const S = {
   form: {
     inputTitle: (label: string) => `Input ${label}`,
     inputPrompt: "Value",
+    cursor: "▌",
     inputHint: "Enter save · Esc cancel",
   },
+  filter: { inputTitle: "Filter list", inputHint: "Enter apply · Esc cancel" },
   confirm: "Confirm",
   cancel: "Cancel",
   hints: {
@@ -287,6 +280,7 @@ export const S = {
         ["a", "add provider"],
         ["d", "delete provider"],
         ["m", "multiplier"],
+        ["/", "filter"],
         ["r", "rename"],
         ["↑↓", "move"],
         ["k", "batch keys"],
@@ -301,6 +295,7 @@ export const S = {
         ["s", "sync attributes"],
         ["e", "edit provider"],
         ["Space", "mark"],
+        ["/", "filter models"],
         ["↑↓", "move"],
         ["Esc", "back"],
         ["?", "help"],
@@ -316,6 +311,7 @@ export const S = {
         ["+", "manual add"],
         ["e", "edit"],
         ["d", "delete"],
+        ["/", "filter"],
         ["Esc", "back"],
       ] as Array<[string, string]>,
       catalogSelect: [
@@ -323,6 +319,7 @@ export const S = {
         ["a", "all"],
         ["n", "none"],
         ["Enter", "confirm"],
+        ["/", "filter"],
         ["Esc", "back"],
       ] as Array<[string, string]>,
     },
@@ -333,6 +330,7 @@ export const S = {
         ["d", "delete"],
         ["r", "rename"],
         ["R", "reset all"],
+        ["/", "filter"],
         ["↑↓", "move"],
         ["?", "help"],
         ["q", "quit"],
@@ -344,6 +342,7 @@ export const S = {
         ["d", "remove target"],
         ["J/K", "move target"],
         ["r", "reset target"],
+        ["/", "filter"],
         ["Esc", "back"],
         ["?", "help"],
         ["q", "quit"],
@@ -357,6 +356,7 @@ export const S = {
         ["c", "clear filter"],
         ["r", "reset target"],
         ["g", "refresh"],
+        ["/", "filter"],
         ["↑↓", "move"],
         ["?", "help"],
         ["q", "quit"],
@@ -371,6 +371,7 @@ export const S = {
       filter: [
         ["↑↓", "move"],
         ["Enter", "select"],
+        ["/", "filter"],
         ["Esc", "cancel"],
         ["c", "clear filter"],
       ] as Array<[string, string]>,
@@ -382,7 +383,7 @@ export const S = {
       ["q", "quit"],
     ] as Array<[string, string]>,
     form: [
-      ["Enter", "edit field"],
+      ["Enter", "edit / save"],
       ["↑↓", "move/select"],
       ["Tab", "next field"],
       ["Shift+Tab", "prev"],

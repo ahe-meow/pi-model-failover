@@ -145,22 +145,49 @@ Responsibility: pure edits to `ModelsJson` providers.
 export function listProviders(m: ModelsJson): Array<{ id: string; node: ProviderNode; owned: boolean; multiplier: number | null }>;
 export function upsertProvider(m: ModelsJson, id: string, node: ProviderNode): ModelsJson;
 export function renameProvider(m: ModelsJson, id: string, name: string): ModelsJson;
-export function deleteProvider(m: ModelsJson, id: string): ModelsJson;
+export function deleteProvider(m: ModelsJson, id: string): ModelsJson; // P1 data-half operation; changes only ModelsJson.providers
 export function addModelToProviders(m: ModelsJson, ids: string[], node: ModelNode): ModelsJson;   // skip if modelId exists
 export function removeModel(m: ModelsJson, providerId: string, modelId: string): ModelsJson;
 export function setMultiplier(m: ModelsJson, id: string, multiplier: number): ModelsJson;        // creates marker with group null if absent
-export function providersWithModel(m: ModelsJson, modelId: string): string[];  // sorted multiplier asc, then id by code point
+export function providersWithModel(
+  models: ModelsJson,
+  modelId: string,
+): string[];
+// Sort owned providers with numeric costMultiplier first by multiplier and then
+// provider id; append unowned providers in provider-id order. The fixture order
+// for ids b, a, c with multipliers 1.00, 0.10, 0.10 is a, c, b.
 ```
+
+Sort owned providers with a numeric costMultiplier first by multiplier and then provider id; append unowned providers in provider-id order.
+
+P1 provider deletion changes only `ModelsJson.providers`; chain target cleanup is the P2 `domain/chains.ts` handoff. `deleteProvider` never inspects or mutates chains.
 
 Tests assert: functions return new objects and never mutate input; unknown fields survive every function (C6); `addModelToProviders` over 5 ids yields 5 identical nodes (C4); `providersWithModel` order `a, c, b` for the C16 fixture.
 
 ### `domain/keyGroups.ts`
 
 ```ts
-export interface KeyEntry { key: string; multiplier?: number }
-export function createKeyGroup(input: { prefix: string; template: KeyGroup["template"]; keys: KeyEntry[]; now: string; id: string }): { group: KeyGroup; providers: Record<string, ProviderNode> };
+export interface KeyEntry {
+  key: string;
+  multiplier?: number;
+}
+
+export function createKeyGroup(input: {
+  prefix: string;
+  template: KeyGroup["template"];
+  keys: KeyEntry[];
+  now: string;
+  id: string;
+  existingIds?: readonly string[];
+}): {
+  group: KeyGroup;
+  providers: Record<string, ProviderNode>;
+};
+
 export function nextFreeSuffix(existing: string[], prefix: string): number;
 ```
+
+`nextFreeSuffix(existing, prefix)` returns the smallest available positive suffix: the smallest positive integer `n` for which `${prefix}-${n}` is absent from `existing`. It does not mutate `existing`. `createKeyGroup` defaults `existingIds` to `[]`, starts at `nextFreeSuffix(existingIds, prefix)`, and skips both occupied ids and ids allocated earlier in the batch.
 
 Tests assert: 20 keys → ids `p-1..p-20`, each with marker `{ group, costMultiplier }` (C1); default multiplier 1; `nextFreeSuffix` skips taken ids so a second batch continues numbering.
 
@@ -173,13 +200,13 @@ export function moveTarget(c: Chain, index: number, delta: -1 | 1): Chain;
 export function addTargets(c: Chain, refs: TargetRef[]): Chain;              // dedupe, reject provider "failover"
 export function removeTarget(c: Chain, ref: TargetRef): Chain;
 export function chainsReferencing(chains: Chain[], providerId: string): Chain[];
-export function dropProvider(chains: Chain[], providerId: string): Chain[];
+export function dropProvider(chains: Chain[], providerId: string): Chain[]; // P2 chain-side cleanup for chain-aware provider deletion
 export function sameModelImport(c: Chain, m: ModelsJson, modelId: string): Chain;   // uses providersWithModel
 export function virtualModelNode(c: Chain, m: ModelsJson): ModelNode | null;      // from first target; null if empty or target missing
 export function resolveTargetSettings(t: Target, s: Settings): TargetSettings;
 ```
 
-Tests assert: `addTargets` rejects `failover/x`; `dropProvider` removes only matching targets (C7 data half); `virtualModelNode` inherits `contextWindow`, `reasoning`, `input` and returns null for empty chain; `sameModelImport` order (C16).
+Tests assert: `addTargets` rejects `failover/x`; P2 `dropProvider` tests remove only matching targets (C7 data half); `virtualModelNode` inherits `contextWindow`, `reasoning`, `input` and returns null for empty chain; `sameModelImport` order (C16).
 
 ### `domain/failureClass.ts`
 
@@ -241,28 +268,66 @@ Tests assert: round trip of a fixture with `piModelManager` markers and nested u
 
 ### `adapters/registrar.ts`
 
-Responsibility: mirror owned providers and the `failover` provider into Pi at runtime.
+Responsibility: mirror owned providers into Pi at runtime. Failover registration is deferred to P2.
 
 ```ts
 export interface PiRegistrar { registerProvider(id: string, cfg: unknown): void; unregisterProvider(id: string): void; isBuiltin(id: string): boolean; }
 export class Registrar {
   constructor(pi: PiRegistrar, notify: (msg: string) => void);
-  syncOwned(m: ModelsJson): void;          // register owned, unregister previously-owned ids now missing, skip built-ins with notify
-  syncFailover(chains: Chain[], m: ModelsJson, provider: object): void;  // register "failover" with non-empty chains; unregister when none
+  syncOwned(models: ModelsJson): void;
 }
 ```
 
-Tests assert: built-in id skipped with one notification; removed provider unregistered; empty chains → `unregisterProvider("failover")`.
+P1 `Registrar` exposes `syncOwned(models)` only. It tracks the ids it previously registered as owned. `syncOwned` registers current owned providers, unregisters previously owned ids that disappeared, and skips any id reported as built in. A skipped built-in produces one notification and never calls registration. Registration receives the raw provider configuration only at this adapter boundary; it is never passed to UI rendering or user-visible reporting.
 
-### `adapters/failoverProvider.ts`
+`syncFailover` begins in P2 and is intentionally absent from the P1 implementation. The `adapters/failoverProvider.ts` contract also begins in P2. Any source interface that includes either P2 surface must keep it unimplemented until the P2 Provider survey is complete.
 
-Responsibility: Pi Provider contract for id `failover`, delegating to `domain/engine`.
+Tests assert: built-in id skipped with one notification; removed provider unregistered. P2 tests cover failover registration separately.
+
+### `adapters/failoverProvider.ts` (P2)
+
+This adapter begins in P2; it is not a P1 contract or implementation surface. P2 reconciles the installed Pi Provider contract before implementing it.
+
+Responsibility: Pi Provider contract for the reserved `failover` provider, delegating request decisions to `domain/engine.ts`.
 
 ```ts
-export function createFailoverProvider(deps: { config: ConfigStore; models: () => ModelsJson; registry: ModelRegistryLike; state: SharedState; history: HistoryLog; clock: Clock; sessionId: string; thinkingLevel: () => string }): { id: "failover"; getModels(): ModelNode[]; filterModels(...): ModelNode[]; stream(...): AsyncIterable<unknown>; streamSimple(...): Promise<unknown>; };
+export interface Attempt {
+  events: AsyncIterable<StreamChunk>;
+  abort(): void;
+}
+export interface StreamChunk {
+  meaningful: boolean;
+  payload: unknown;
+  done?: boolean;
+}
+export interface FailureInput {
+  status?: number;
+  code?: string;
+  body?: string;
+  timer?: "ttft" | "no-progress";
+  sentParams: string[];
+}
+export interface ModelRegistryLike {
+  find(provider: string, modelId: string): Model<Api> | undefined;
+  getProvider(provider: string): {
+    streamSimple(
+      model: Model<Api>,
+      context: Context,
+      options?: SimpleStreamOptions,
+    ): AssistantMessageEventStream;
+  } | undefined;
+  getApiKeyAndHeaders(model: Model<Api>): Promise<ResolvedRequestAuth>;
+}
+export interface FailoverConfigFactory {
+  (chains: Chain[], models: ModelsJson): ProviderConfig;
+}
 ```
 
-`send` implementation: `registry.find(provider, modelId)`, apply `modelParameters`, map `reasoningEffort: "inherit"` to `thinkingLevel()`, drop `stripped` params, forward `signal`. Tests assert: `getModels` returns one node per non-empty chain; a request to `failover/x` for unknown chain throws a redacted error; `send` maps `inherit` correctly.
+`ProviderConfig.streamSimple` consumes and returns Pi's official `AssistantMessageEventStream`, created with `createAssistantMessageEventStream` from `@earendil-works/pi-ai`. The domain engine remains Pi-independent and exposes only `Attempt`/`StreamChunk`; `@earendil-works/pi-ai` is imported only by `src/adapters/failoverProvider.ts`.
+
+The adapter exposes one Virtual Model per non-empty Chain as `failover/<chainId>`, resolves the underlying registry model at request time, delegates attempts to the engine, and forwards only the winning attempt's events. Unknown chains and provider failures use generic redacted errors and never expose credentials or raw response bodies.
+
+`send` resolves `provider/modelId`, applies Target model parameters, maps `reasoningEffort: "inherit"` to the current thinking level, strips rejected compatibility parameters, forwards the attempt signal, and converts Pi events into the domain stream shape. Tests use a fake `ModelRegistryLike` and the official event-stream factory without network access.
 
 ### `adapters/catalogImporters.ts`
 
@@ -294,7 +359,7 @@ Tests assert: 600 appends → 500 lines, newest kept (C17); malformed line count
 
 ## tui/
 
-All components implement Pi's custom component shape: `{ render(width: number): string[]; handleInput(data: string): void; invalidate?(): void; focused?: boolean }`. Rendering uses `truncateToWidth`, `visibleWidth`, `Key`, `matchesKey` from `@earendil-works/pi-tui`. Strings come from `src/strings.ts`.
+All project components implement the project's `PiComponent` shape: `{ render(width: number): string[]; handleInput(data: string): void; invalidate?(): void; focused?: boolean }`. `createApp` may omit the optional `invalidate`. The installed `@earendil-works/pi-tui` `Component` contract requires `invalidate(): void`; before passing the app to `ui.custom`, `src/index.ts` supplies a wrapper with a required `invalidate` that delegates to the app's optional method. Rendering uses `truncateToWidth`, `visibleWidth`, `Key`, `matchesKey` from `@earendil-works/pi-tui`. Strings come from `src/strings.ts`.
 
 ### `tui/primitives/tabBar.ts`
 
@@ -359,16 +424,16 @@ Thin wrapper: `ScrollList` with `multiSelect: true`, `a` marks all, `n` marks no
 Responsibility: root component; owns `TabBar`, active tab component, `HelpOverlay`, `KeyHints`, memory-mode banner; routes `Tab`, `Shift+Tab`, `1`–`4`, `?`, `q`.
 
 ```ts
-export function createApp(deps: AppDeps): PiComponent;  // AppDeps = every store, adapter, notify, and settings getter
+export function createApp(deps: AppDeps): PiComponent;  // AppDeps = every store, adapter, notify, and settings getter; the returned invalidate is optional and is required by pi-tui only after src/index.ts wraps it for ui.custom
 ```
 
 Tests: `2` switches to Chains; `?` shows overlay and swallows other keys until closed; total render height = header + tabs + listRows + footer for every tab (C19).
 
 ### `tui/tabs/modelManager.ts`, `tui/tabs/chains.ts`, `tui/tabs/history.ts`, `tui/tabs/settings.ts`
 
-One module per Tab; each composes primitives and calls `domain/*` functions then `ConfigStore.update` / `ModelsJsonFile.update` / `Registrar.sync*`. Sub-screens that push a module past 400 lines split into `tui/tabs/modelManager/*.ts` (provider detail, key-group form, catalog screen). Screens and key maps: `docs/design/04-ui.md`.
+One module per Tab; each composes primitives and calls `domain/*` functions then `ConfigStore.update` / `ModelsJsonFile.update` / `Registrar.syncOwned` for P1 provider changes. P2 failover synchronization is deferred. Sub-screens that push a module past 400 lines split into `tui/tabs/modelManager/*.ts` (provider detail, key-group form, catalog screen). Screens and key maps: `docs/design/04-ui.md`.
 
-Tests per tab: each key in the key map reaches its handler; destructive actions (delete provider, delete chain, reset all) require the confirmation screen; provider delete confirmation lists `chainsReferencing` names (C7 UI half); history `r` calls `SharedState.update` with `reset()` and appends a `manual` event (C18 UI half); settings `listRows` bound 5–20.
+Tests per tab: each key in the key map reaches its handler; destructive actions (delete provider, delete chain, reset all) require the confirmation screen; P1 provider-delete confirmation covers provider removal only; P2 adds chain-aware confirmation naming affected chains, target cleanup, and affected Virtual Model re-registration (C7 UI half); history `r` calls `SharedState.update` with `reset()` and appends a `manual` event (C18 UI half); settings `listRows` bound 5–20.
 
 ### `src/strings.ts`
 

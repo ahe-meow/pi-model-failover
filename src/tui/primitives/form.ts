@@ -1,6 +1,7 @@
 import { Key, type KeyId, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { redactSecret } from "../../domain/redact.js";
 import { S } from "../../strings.js";
+import { theme } from "./theme.js";
 
 export type Field =
   | {
@@ -41,11 +42,37 @@ function copyValue(value: Field["value"]): Field["value"] {
   return Array.isArray(value) ? [...value] : value;
 }
 
+function isChoice(field: Field): field is Extract<Field, { kind: "select" | "multiselect" }> {
+  return ["select", "multiselect"].includes(field.kind);
+}
+
+function cursorValue(value: string, cursor: number, width: number): string {
+  const position = Math.max(0, Math.min(value.length, cursor));
+  if (value.length + 1 <= width)
+    return `${value.slice(0, position)}${S.form.cursor}${value.slice(position)}`;
+  let left = Math.min(position, Math.max(0, width - 1));
+  let right = Math.min(value.length - position, Math.max(0, width - 1 - left));
+  while (true) {
+    const start = position - left;
+    const end = position + right;
+    const prefix = start > 0 ? "…" : "";
+    const suffix = end < value.length ? "…" : "";
+    const available = Math.max(0, width - 1 - prefix.length - suffix.length);
+    if (left + right <= available || (left === 0 && right === 0)) {
+      return `${prefix}${value.slice(start, position)}${S.form.cursor}${value.slice(position, end)}${suffix}`;
+    }
+    if (right >= left && right > 0) right--;
+    else if (left > 0) left--;
+  }
+}
+
 export class Form {
   focus = 0;
   private cursor = 0;
   private editing = false;
   private draftValue: Field["value"] | undefined;
+  private draftText: string | undefined;
+  private directEdit = false;
 
   constructor(
     private fields: Field[],
@@ -70,7 +97,7 @@ export class Form {
       const line = truncateToWidth(`${label}${this.renderValue(field)}`, width);
       out.push(index === this.focus ? this.highlight(line, width) : line);
       const warning = field.kind === "select" ? field.warning?.[field.value] : undefined;
-      if (warning) out.push(truncateToWidth(`⚠ ${warning}`, width));
+      if (warning) out.push(truncateToWidth(theme.warning(`⚠ ${warning}`), width));
     });
     return out;
   }
@@ -84,10 +111,21 @@ export class Form {
     if (!field) return;
     if (field.kind === "text" && field.multiline && /^[\r\n]$/.test(data)) {
       field.value += "\n";
+      this.directEdit = true;
       return;
     }
     if (this.handleNavigation(data)) return;
-    if (field.kind === "text" || field.kind === "number") this.handleFieldInput(field, data);
+    this.handleFieldInput(field, data);
+  }
+
+  private handleFieldInput(field: Field, data: string): void {
+    if (field.kind === "number") {
+      field.value = this.handleNumberInput(field, field.value, data);
+      this.directEdit = true;
+    } else if (field.kind === "text") {
+      field.value = this.handleTextInput(field, field.value, data);
+      this.directEdit = true;
+    }
   }
 
   private renderValue(field: Field): string {
@@ -117,8 +155,8 @@ export class Form {
   private renderEditor(width: number): string[] {
     const field = this.fields[this.focus];
     if (!field) return [];
-    const lines = [truncateToWidth(S.form.inputTitle(field.label), width)];
-    if (field.kind === "select" || field.kind === "multiselect") {
+    const lines = [truncateToWidth(theme.title(S.form.inputTitle(field.label)), width)];
+    if (isChoice(field)) {
       const draft = Array.isArray(this.draftValue) ? this.draftValue : [];
       lines.push(
         ...field.options.map((option, index) => {
@@ -134,14 +172,17 @@ export class Form {
         field.kind === "select"
           ? field.warning?.[field.options[this.cursor] ?? field.value]
           : undefined;
-      if (warning) lines.push(truncateToWidth(`⚠ ${warning}`, width));
+      if (warning) lines.push(truncateToWidth(theme.warning(`⚠ ${warning}`), width));
     } else {
-      const value = this.draftValue ?? field.value;
+      const value = this.draftText ?? String(field.value);
+      const prompt = `${S.form.inputPrompt}: `;
       const display =
-        field.kind === "text" && field.secret ? redactSecret(value as string) : String(value);
-      lines.push(truncateToWidth(`${S.form.inputPrompt}: ${display}`, width));
+        field.kind === "text" && field.secret
+          ? `${redactSecret(value)}${S.form.cursor}`
+          : cursorValue(value, this.cursor, Math.max(1, width - visibleWidth(prompt)));
+      lines.push(truncateToWidth(theme.current(`${prompt}${display}`), width));
     }
-    lines.push(truncateToWidth(S.form.inputHint, width));
+    lines.push(truncateToWidth(theme.muted(S.form.inputHint), width));
     return lines;
   }
 
@@ -152,36 +193,42 @@ export class Form {
 
   private handleNavigation(data: string): boolean {
     if (isKey(data, Key.escape)) {
+      this.directEdit = false;
       this.onCancel();
       return true;
     }
     if (isKey(data, Key.tab) || isKey(data, Key.down)) {
+      this.directEdit = false;
       this.focus = (this.focus + 1) % this.fields.length;
       return true;
     }
     if (isKey(data, Key.shift("tab")) || isKey(data, Key.up)) {
+      this.directEdit = false;
       this.focus = (this.focus - 1 + this.fields.length) % this.fields.length;
       return true;
     }
     if (isKey(data, Key.enter)) {
-      if (this.focus === this.fields.length - 1) this.onSubmit(this.values());
-      else this.beginEditing();
+      if (this.directEdit && this.focus === this.fields.length - 1) {
+        this.directEdit = false;
+        this.onSubmit(this.values());
+      } else {
+        this.beginEditing();
+      }
       return true;
     }
     return false;
-  }
-
-  private handleFieldInput(field: Field, data: string): void {
-    if (field.kind === "number") field.value = this.handleNumberInput(field, field.value, data);
-    else if (field.kind === "text") field.value = this.handleTextInput(field, field.value, data);
   }
 
   private beginEditing(): void {
     const field = this.fields[this.focus];
     if (!field) return;
     this.editing = true;
+    this.directEdit = false;
     this.draftValue = copyValue(field.value);
-    if (field.kind === "select") {
+    if (["text", "number"].includes(field.kind)) {
+      this.draftText = String(field.value);
+      this.cursor = this.draftText.length;
+    } else if (field.kind === "select") {
       this.cursor = Math.max(0, field.options.indexOf(field.value));
     } else if (field.kind === "multiselect") {
       this.cursor = 0;
@@ -194,16 +241,26 @@ export class Form {
     if (isKey(data, Key.escape)) {
       this.editing = false;
       this.draftValue = undefined;
+      this.draftText = undefined;
+      this.directEdit = false;
       return;
     }
     if (isKey(data, Key.enter)) {
       if (field.kind === "select") {
         field.value = field.options[this.cursor] ?? field.value;
+      } else if (field.kind === "number") {
+        const value = Number(this.draftText ?? field.value);
+        if (Number.isFinite(value)) field.value = this.clamp(field, value);
+      } else if (field.kind === "text") {
+        field.value = this.draftText ?? field.value;
       } else if (this.draftValue !== undefined) {
         field.value = copyValue(this.draftValue) as never;
       }
       this.editing = false;
       this.draftValue = undefined;
+      this.draftText = undefined;
+      this.directEdit = false;
+      if (this.focus === this.fields.length - 1) this.onSubmit(this.values());
       return;
     }
     if (field.kind === "select") {
@@ -215,11 +272,51 @@ export class Form {
       if (isKey(data, Key.space)) this.toggle(field);
       return;
     }
-    if (field.kind === "number") {
-      this.draftValue = this.handleNumberInput(field, this.draftValue as number, data);
-    } else {
-      this.draftValue = this.handleTextInput(field, this.draftValue as string, data);
+    this.handleEditableInput(field, data);
+  }
+
+  private handleEditableInput(
+    field: Extract<Field, { kind: "text" | "number" }>,
+    data: string,
+  ): void {
+    const value = this.draftText ?? String(field.value);
+    if (isKey(data, Key.left)) {
+      this.cursor = Math.max(0, this.cursor - 1);
+      return;
     }
+    if (isKey(data, Key.right)) {
+      this.cursor = Math.min(value.length, this.cursor + 1);
+      return;
+    }
+    if (isKey(data, Key.home)) {
+      this.cursor = 0;
+      return;
+    }
+    if (isKey(data, Key.end)) {
+      this.cursor = value.length;
+      return;
+    }
+    if (isKey(data, Key.backspace)) {
+      if (this.cursor > 0) {
+        this.draftText = `${value.slice(0, this.cursor - 1)}${value.slice(this.cursor)}`;
+        this.cursor--;
+      }
+      return;
+    }
+    if (isKey(data, Key.delete)) {
+      this.draftText = `${value.slice(0, this.cursor)}${value.slice(this.cursor + 1)}`;
+      return;
+    }
+    if (field.kind === "number" && !/^[0-9]$/.test(data)) return;
+    const insert =
+      field.kind === "text" && field.multiline && /^[\r\n]$/.test(data)
+        ? "\n"
+        : data.length >= 1 && !data.startsWith("\x1b")
+          ? data
+          : "";
+    if (insert === "") return;
+    this.draftText = `${value.slice(0, this.cursor)}${insert}${value.slice(this.cursor)}`;
+    this.cursor += insert.length;
   }
 
   private moveCursor(length: number, data: string): void {

@@ -17,7 +17,8 @@ describe("Form", () => {
     f.handleInput(Key.tab);
     f.handleInput(Key.enter);
     f.handleInput("9");
-    expect(f.render(60).join("\n")).toContain("20");
+    f.handleInput(Key.enter);
+    expect(f.values().n).toBe(20);
   });
 
   it("opens a text field editor on Enter and supports save or cancel", () => {
@@ -65,11 +66,64 @@ describe("Form", () => {
     expect(f.values().mode).toBe("two");
   });
 
-  it("Enter on last field submits values; Esc cancels", () => {
+  it("enters the editor before submitting the last field", () => {
+    const submit = vi.fn();
+    const f = new Form([{ kind: "text", key: "name", label: "Name", value: "" }], submit, vi.fn());
+
+    f.handleInput(Key.enter);
+
+    expect(f.isEditing()).toBe(true);
+    expect(submit).not.toHaveBeenCalled();
+    expect(f.render(40).join("\n")).toContain("Input Name");
+  });
+
+  it("inserts number input at the cursor", () => {
+    const f = new Form(
+      [{ kind: "number", key: "n", label: "N", value: 20, min: 0, max: 999 }],
+      vi.fn(),
+      vi.fn(),
+    );
+
+    f.handleInput(Key.enter);
+    f.handleInput(Key.home);
+    f.handleInput("1");
+    f.handleInput(Key.enter);
+
+    expect(f.values().n).toBe(120);
+  });
+
+  it("shows the cursor while editing text", () => {
+    const f = new Form(
+      [{ kind: "text", key: "name", label: "Name", value: "old" }],
+      vi.fn(),
+      vi.fn(),
+    );
+
+    f.handleInput(Key.enter);
+
+    expect(f.render(60).join("\n")).toContain("old▌");
+  });
+
+  it("keeps the cursor visible for a long value", () => {
+    const f = new Form(
+      [{ kind: "text", key: "name", label: "Name", value: "abcdefghijklmnopqrstuvwxyz" }],
+      vi.fn(),
+      vi.fn(),
+    );
+
+    f.handleInput(Key.enter);
+
+    expect(f.render(24).join("\n")).toContain("▌");
+  });
+  it("commits and submits after editing the last field", () => {
     const submit = vi.fn();
     const cancel = vi.fn();
     const f = new Form([{ kind: "number", key: "n", label: "N", value: 3 }], submit, cancel);
+
     f.handleInput(Key.enter);
+    expect(submit).not.toHaveBeenCalled();
+    f.handleInput(Key.enter);
+
     expect(submit).toHaveBeenCalledWith({ n: 3 });
     f.handleInput(Key.escape);
     expect(cancel).toHaveBeenCalled();

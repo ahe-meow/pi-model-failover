@@ -349,11 +349,11 @@ Expected: PASS, 5 tests.
 
 ```ts
 import { describe, expect, it } from "vitest";
-import { redactProvider, redactSecret } from "../../src/domain/redact";
+import { redactProvider, redactSecret } from "../../src/domain/redact.js";
 
 describe("redactSecret (C22)", () => {
   it("keeps 3 head and 4 tail chars", () => {
-    expect(redactSecret("sk-1234567890abcd")).toBe("sk-…abcd");
+    expect(redactSecret("demo-1234567890abcd")).toBe("dem…abcd");
   });
   it("short values collapse to an ellipsis", () => {
     expect(redactSecret("abcd")).toBe("…");
@@ -368,9 +368,9 @@ describe("redactSecret (C22)", () => {
 
 describe("redactProvider", () => {
   it("redacts apiKey and auth-like headers, keeps others", () => {
-    const p = redactProvider({ name: "r", baseUrl: "u", api: "openai-completions", apiKey: "sk-1234567890abcd",
-      headers: { Authorization: "Bearer sk-9999999999zzzz", "X-Team": "a" }, models: [] });
-    expect(p.apiKey).toBe("sk-…abcd");
+    const p = redactProvider({ name: "r", baseUrl: "u", api: "openai-completions", apiKey: "demo-1234567890abcd",
+      headers: { Authorization: "Bearer demo-9999999999zzzz", "X-Team": "a" }, models: [] });
+    expect(p.apiKey).toBe("dem…abcd");
     expect(p.headers).toEqual({ Authorization: "Bea…zzzz", "X-Team": "a" });
   });
 });
@@ -385,7 +385,7 @@ Expected: FAIL, `Cannot find module`.
 
 ```ts
 // src/domain/redact.ts
-import type { ProviderNode } from "./types";
+import type { ProviderNode } from "./types.js";
 
 const ENV_REF = /^\$\{?[A-Z_][A-Z0-9_]*\}?$/;
 const SECRET_HEADER = /key|token|auth/i;
@@ -430,7 +430,7 @@ Expected: PASS, 4 tests.
 ```ts
 // test/config/migrations.spec.ts
 import { describe, expect, it } from "vitest";
-import { CONFIG_VERSION, STATE_VERSION, configMigrations, stateMigrations } from "../../src/config/migrations";
+import { CONFIG_VERSION, STATE_VERSION, configMigrations, stateMigrations } from "../../src/config/migrations.js";
 
 describe("migration tables", () => {
   it("cover every version below current", () => {
@@ -443,9 +443,9 @@ describe("migration tables", () => {
 ```ts
 // test/config/configStore.spec.ts
 import { describe, expect, it } from "vitest";
-import { ConfigStore, DEFAULT_SETTINGS } from "../../src/config/configStore";
-import { WriteQueue } from "../../src/config/writeQueue";
-import { MemoryFs } from "../fakes/memoryFs";
+import { ConfigStore, DEFAULT_SETTINGS } from "../../src/config/configStore.js";
+import { WriteQueue } from "../../src/config/writeQueue.js";
+import { MemoryFs } from "../fakes/memoryFs.js";
 
 describe("ConfigStore", () => {
   it("defaults", async () => {
@@ -562,7 +562,7 @@ Expected: output contains `truncateToWidth visibleWidth matchesKey Key`. Write t
 ```ts
 // test/tui/tabBar.spec.ts
 import { describe, expect, it } from "vitest";
-import { TabBar } from "../../src/tui/primitives/tabBar";
+import { TabBar } from "../../src/tui/primitives/tabBar.js";
 
 describe("TabBar", () => {
   it("next and prev wrap", () => {
@@ -579,7 +579,7 @@ describe("TabBar", () => {
 ```ts
 // test/tui/keyHints.spec.ts
 import { describe, expect, it } from "vitest";
-import { renderKeyHints } from "../../src/tui/primitives/keyHints";
+import { renderKeyHints } from "../../src/tui/primitives/keyHints.js";
 
 describe("renderKeyHints", () => {
   it("fits one line when short", () => {
@@ -660,7 +660,7 @@ Expected: PASS, 4 tests.
 
 ```ts
 import { describe, expect, it } from "vitest";
-import { ScrollList } from "../../src/tui/primitives/scrollList";
+import { ScrollList } from "../../src/tui/primitives/scrollList.js";
 
 const rows = (n: number) => Array.from({ length: n }, (_, i) => ({ text: `row${i}` }));
 
@@ -819,10 +819,10 @@ import { Form } from "../../src/tui/primitives/form";
 describe("Form", () => {
   it("Tab moves focus, number clamps, secret redacts", () => {
     const f = new Form([
-      { kind: "text", key: "k", label: "Key", value: "sk-1234567890abcd", secret: true },
+      { kind: "text", key: "k", label: "Key", value: "demo-1234567890abcd", secret: true },
       { kind: "number", key: "n", label: "N", value: 7, min: 5, max: 20 },
     ], vi.fn(), vi.fn());
-    expect(f.render(60)[0]).toContain("sk-…abcd");
+    expect(f.render(60)[0]).toContain("dem…abcd");
     f.handleInput(Key.tab); for (let i = 0; i < 30; i++) f.handleInput(Key.right);
     expect(f.render(60)[1]).toContain("20");
   });

@@ -1,4 +1,4 @@
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { ScrollList } from "../../src/tui/primitives/scrollList.js";
 
@@ -11,6 +11,21 @@ describe("ScrollList (C19)", () => {
 
     expect(list.render(10)[0]).toBe("\x1b[7mrow0      \x1b[27m");
     expect(list.render(10)[0]).not.toContain("▶");
+  });
+
+  it("keeps table headers aligned with overflow rows", () => {
+    const list = new ScrollList({
+      listRows: 1,
+      columns: [{ header: "Provider" }, { header: "API" }],
+    });
+    list.setRows([
+      { text: "", cells: ["long-provider-name", "openai"] },
+      { text: "", cells: ["another", "anthropic"] },
+    ]);
+
+    const header = stripTerminalSequences(list.header(24));
+    const row = stripTerminalSequences(list.render(24)[0] ?? "");
+    expect(header.indexOf("API")).toBe(row.indexOf("openai"));
   });
 
   it("does not render a scrollbar when rows fit", () => {

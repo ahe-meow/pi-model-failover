@@ -1,4 +1,4 @@
-import { Key, type KeyId, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
+import { type KeyId, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 import type { ConfigStore } from "../../../config/configStore.js";
 import { CATALOG_DEFAULTS, syncAttributes } from "../../../domain/catalog.js";
 import { renameProvider, setMultiplier, upsertProvider } from "../../../domain/providers.js";
@@ -11,14 +11,16 @@ import type {
   ProviderNode,
 } from "../../../domain/types.js";
 import { S } from "../../../strings.js";
+import type { Confirm } from "../../primitives/confirm.js";
 import { type Field, Form } from "../../primitives/form.js";
 import type { Row } from "../../primitives/scrollList.js";
+import { theme } from "../../primitives/theme.js";
 import type { TabComponent } from "../history.js";
 import type { ModelManagerDeps } from "../modelManager.js";
 
 const M = S.modelManager;
-const { providerForm: P, modelForm: F, catalog: C } = M;
-const E = String();
+const { providerForm: P, modelForm: F, catalog: C } = M,
+  E = String();
 export const CATALOG_HEADERS = {
   catalog: (count: number) => C.header(count),
   "endpoint-provider": () => C.endpointProviderHeader,
@@ -30,42 +32,26 @@ export type CatalogMode = keyof typeof CATALOG_HEADERS;
 export type ImportedCatalogMode = Extract<CatalogMode, "endpoint-models" | "builtin-models">;
 export type CatalogProviderChoice = { id: string; node: ProviderNode };
 export const CATALOG_MODES = Object.keys(CATALOG_HEADERS) as CatalogMode[];
-export const catalogIsKey = (data: string, key: KeyId): boolean =>
-  data === key || matchesKey(data, key);
-export const catalogFinite = (value: unknown): value is number =>
-  typeof value === "number" && Number.isFinite(value);
+export const catalogIsKey = (data: string, key: KeyId) => data === key || matchesKey(data, key);
 export const catalogPick = <T>(items: T[], indices: number[]): T[] =>
   indices.map((index) => items[index]).filter((item): item is T => item !== undefined);
+const row = (cells: string[]): Row => ({ text: cells.join("  "), cells });
 export const catalogProviderRow = ({ id, node }: CatalogProviderChoice): Row => {
   const key = node.apiKey;
   const shown = key === undefined ? M.missingKey : redactSecret(key);
   const url = node.baseUrl ?? E;
   const shownUrl = key === undefined ? url : url.split(key).join(shown);
-  return { text: `${id}  ${shownUrl}  ${node.api}  ${M.keyLabel} ${shown}` };
+  return row([id, shownUrl, node.api ?? E, `${M.keyLabel} ${shown}`]);
 };
-export const catalogRow = (model: CatalogModel): Row => ({
-  text: `${model.id}  ${model.name ?? E}  ${model.contextWindow} ${M.contextLabel}  ${model.maxTokens} ${M.maxTokensLabel}  ${model.reasoning ? M.reasoningLabel : M.notReasoning}  ${model.vision ? C.boolean.yes : C.boolean.no}`,
-});
-export const catalogModelRow = (model: CatalogModel): Row => ({
-  text: `${model.id}${model.name === undefined ? E : `  ${model.name}`}`,
-});
-const clampCursor = (value: number, count: number): number =>
-  Math.max(0, Math.min(count - 1, value));
-export function nextCatalogCursor(
-  data: string,
-  current: number,
-  count: number,
-  rows: number,
-): number {
-  if (count === 0) return 0;
-  const key = [Key.home, Key.end, Key.up, Key.down, Key.pageUp, Key.pageDown].findIndex((item) =>
-    catalogIsKey(data, item),
-  );
-  if (key === 0) return 0;
-  if (key === 1) return count - 1;
-  const delta = [-1, 1, -rows, rows][key - 2];
-  return delta === undefined ? current : clampCursor(current + delta, count);
-}
+export const catalogRow = (model: CatalogModel): Row =>
+  row([
+    model.id,
+    model.name ?? E,
+    String(model.contextWindow),
+    String(model.maxTokens),
+    model.reasoning ? C.boolean.yes : C.boolean.no,
+    model.vision ? C.boolean.yes : C.boolean.no,
+  ]);
 type TextOptions = { secret?: boolean; multiline?: boolean };
 const textField = (key: string, label: string, value: string, options: TextOptions = {}): Field =>
   ({ kind: "text", key, label, value, ...options }) as Field;
@@ -103,6 +89,17 @@ export const fitCatalogBody = (
     .slice(0, listRows)
     .map((line) => truncateToWidth(line, width))
     .concat(Array(Math.max(0, listRows - lines.length)).fill(E));
+export function renderModelManagerConfirm(
+  confirm: Confirm | undefined,
+  title: string,
+  width: number,
+  listRows: number,
+): string[] {
+  return [
+    theme.title(truncateToWidth(title, width)),
+    ...fitCatalogBody(confirm?.render(width) ?? [], width, listRows),
+  ];
+}
 type Values = Record<string, unknown>;
 const text = (values: Values, field: string): string =>
   typeof values[field] === "string" ? (values[field] as string) : E;
@@ -135,7 +132,7 @@ class FormView implements TabComponent {
     );
   }
   render = (width: number, rows: number): string[] => [
-    truncateToWidth(this.title, width),
+    theme.title(truncateToWidth(this.title, width)),
     ...fitCatalogBody(this.form.render(width), width, rows, this.form.focus),
   ];
   handleInput(data: string): void | Promise<void> {
@@ -173,7 +170,7 @@ const providerTitle = (mode: ProviderMode, add: boolean): string =>
   ({ rename: P.renameTitle, multiplier: P.multiplierTitle, full: add ? P.addTitle : P.editTitle })[
     mode
   ];
-const validProviderName = (name: string): boolean => !!name && !/[\s/]/.test(name);
+const validProviderName = (name: string): boolean => Boolean(name) && !/[\s/]/.test(name);
 const validHttpUrl = (url: string): boolean => {
   try {
     return ["http:", "https:"].includes(new URL(url).protocol);
@@ -185,8 +182,8 @@ function providerFields(provider: ProviderNode | undefined, mode: ProviderMode):
   const labels = P.labels;
   const nameField = (value: string): Field => textField("name", labels.name, value);
   const mField = (value: string): Field => textField("multiplier", labels.multiplier, value);
-  const multiplier = provider?.piModelFailover?.costMultiplier;
-  const authHeader = provider?.authHeader ? String(true) : E;
+  const multiplier = provider?.piModelFailover?.costMultiplier,
+    authHeader = provider?.authHeader ? String(true) : E;
   if (mode === "rename") return [nameField(provider?.name ?? E)];
   if (mode === "multiplier") return [mField(String(multiplier ?? 1))];
   return [
@@ -247,10 +244,10 @@ function buildProviderNode(
     : { name: values.name, baseUrl: values.baseUrl, api: values.api, models: [] };
   Object.assign(node, { name: values.name, baseUrl: values.baseUrl, api: values.api });
   if (values.apiKey) node.apiKey = values.apiKey;
-  else delete node.apiKey;
+  else Reflect.deleteProperty(node, "apiKey");
   if (values.authHeader) node.authHeader = true;
-  else delete node.authHeader;
-  if (Object.keys(values.headers).length === 0) delete node.headers;
+  else Reflect.deleteProperty(node, "authHeader");
+  if (Object.keys(values.headers).length === 0) Reflect.deleteProperty(node, "headers");
   else node.headers = structuredClone(values.headers);
   return node;
 }
@@ -327,7 +324,7 @@ function updateModel(node: ModelNode, values: Values): ModelNode | string {
     numbers as ModelNumbers;
   const next = structuredClone(node);
   const name = text(values, "name").trim();
-  if (!name) delete next.name;
+  if (!name) Reflect.deleteProperty(next, "name");
   else next.name = name;
   Object.assign(next, {
     reasoning: values.reasoning === F.boolean.yes,

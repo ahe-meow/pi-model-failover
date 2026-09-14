@@ -3,35 +3,47 @@ import { fetchEndpointModels, importPiBuiltinCatalog } from "../../../adapters/c
 import {
   CATALOG_DEFAULTS,
   removeCatalogModel,
-  toModelNode,
   upsertCatalogModel,
 } from "../../../domain/catalog.js";
 import type { Fetch } from "../../../domain/ports.js";
-import { addModelToProviders } from "../../../domain/providers.js";
 import type { CatalogModel, ModelsJson } from "../../../domain/types.js";
 import { S } from "../../../strings.js";
 import { Confirm } from "../../primitives/confirm.js";
-import { Form } from "../../primitives/form.js";
+import type { Form } from "../../primitives/form.js";
 import { MultiSelectList } from "../../primitives/multiSelectList.js";
+import { tableColumns } from "../../primitives/table.js";
+import { renderFilterDraft } from "../../primitives/textFilter.js";
+import { theme } from "../../primitives/theme.js";
 import type { TabComponent } from "../history.js";
 import type { ModelManagerDeps } from "../modelManager.js";
 import {
-  catalogRow,
-  catalogFinite as finite,
-  fitCatalogBody,
+  catalogProviders,
+  createCatalogFilters,
+  dispatchCatalogSelection,
+  filterCatalogLists,
+  selectedCatalogIds,
+  syncCatalogList,
+} from "./catalogFilter.js";
+import {
+  createCatalogManualForm,
+  parseCatalogModel,
+  renderCatalogConfirm,
+  renderCatalogManual,
+} from "./catalogManual.js";
+import { persistCatalog, persistModelsToProviders } from "./catalogPersistence.js";
+import {
   CATALOG_HEADERS as HEADER,
   type ImportedCatalogMode as ImportedMode,
   catalogIsKey as isKey,
   CATALOG_MODES as MODES,
   type CatalogMode as Mode,
-  catalogManualFields as manualFields,
-  catalogModelRow as modelRow,
-  nextCatalogCursor as nextCursor,
+  catalogRow as modelRow,
   type CatalogProviderChoice as ProviderChoice,
   catalogPick as pick,
   catalogProviderRow as providerRow,
-  updateCatalog,
 } from "./forms.js";
+
+const CATALOG = S.modelManager.catalog;
 
 export interface CatalogScreenDeps extends ModelManagerDeps {
   fetch: Fetch;
@@ -47,6 +59,9 @@ export class CatalogScreen implements TabComponent {
       mode,
       new MultiSelectList({
         listRows: 7,
+        columns: tableColumns(
+          mode.includes("provider") ? CATALOG.providerHeader : CATALOG.tableHeader,
+        ),
         onConfirm: (indices) => this.confirmSelection(mode, indices),
       }),
     ]),
@@ -57,7 +72,6 @@ export class CatalogScreen implements TabComponent {
   private catalogModels: CatalogModel[] = [];
   private importModels: CatalogModel[] = [];
   private providerModels: CatalogModel[] = [];
-  private catalogCursor = 0;
   private listRows = 7;
   private manualForm: Form | undefined;
   private manualDefaults: Record<string, unknown> = {};
@@ -65,6 +79,8 @@ export class CatalogScreen implements TabComponent {
   private confirm: Confirm | undefined;
   private error: string | undefined;
   private pending: Promise<void> | undefined;
+  private readonly filters = createCatalogFilters();
+  private visibleCatalogModels: CatalogModel[] = [];
   constructor(deps: CatalogScreenDeps) {
     this.deps = deps;
     this.models = structuredClone(deps.initialModels);
@@ -75,7 +91,6 @@ export class CatalogScreen implements TabComponent {
     this.models = structuredClone(models);
     this.syncProviders();
   }
-
   async beginEndpointImport(providerId: string): Promise<void> {
     const provider = this.models.providers[providerId];
     if (provider?.baseUrl === undefined)
@@ -95,23 +110,40 @@ export class CatalogScreen implements TabComponent {
       this.fail(S.modelManager.catalog.endpointImportFailed);
     }
   }
-
   async beginProviderAdd(modelId: string): Promise<void> {
     const model = this.deps.config.get().catalog.find((candidate) => candidate.id === modelId);
     if (model === undefined) return this.fail(S.modelManager.catalog.saveFailed);
     this.enterProviderTargets([model]);
   }
-
   render(width: number, listRows: number): string[] {
     this.listRows = Math.max(0, listRows);
-    for (const list of Object.values(this.lists)) list.setListRows(this.listRows);
+    const dataRows = Math.max(0, this.listRows - 1);
+    for (const list of Object.values(this.lists)) list.setListRows(dataRows);
     this.syncCatalog();
-    if (this.manualForm !== undefined) return this.renderManual(width);
-    if (this.confirm !== undefined) return this.renderConfirm(width);
-    return [truncateToWidth(this.header(), width), ...this.lists[this.mode].render(width)];
+    const filter = this.filters[this.mode];
+    if (filter.isEditing)
+      return renderFilterDraft(
+        width,
+        S.filter.inputTitle,
+        filter,
+        2 + Math.max(0, this.listRows - 1),
+      );
+    if (this.manualForm !== undefined)
+      return renderCatalogManual(this.manualForm, this.manualError, width, this.listRows);
+    if (this.confirm !== undefined)
+      return renderCatalogConfirm(this.confirm, this.header(), width, this.listRows);
+    return [
+      theme.title(truncateToWidth(this.header(), width)),
+      this.lists[this.mode].header(width),
+      ...this.lists[this.mode].render(width),
+    ];
   }
-
   async handleInput(data: string): Promise<void> {
+    const filter = this.filters[this.mode];
+    if (filter.isEditing) {
+      if (filter.handleInput(data) === "applied") this.applyFilter(this.mode);
+      return;
+    }
     if (this.manualForm !== undefined) {
       this.manualForm.handleInput(data);
       return this.waitForPending();
@@ -121,35 +153,45 @@ export class CatalogScreen implements TabComponent {
       return this.waitForPending();
     }
     if (this.mode === "catalog") {
-      if (data === "i") {
+      if (isKey(data, Key.slash)) this.filters.catalog.open();
+      else if (data === "i") {
         this.setMode("endpoint-provider");
       } else if (data === "p") this.start(() => this.importBuiltin());
       else if (data === "+") this.openManual();
       else if (data === "e") {
+        const marked = this.lists.catalog.markedIndices();
+        if (this.visibleCatalogModels.length === 0) return;
         const model =
-          this.catalogModels[this.lists.catalog.markedIndices()[0] ?? this.catalogCursor];
+          marked.length > 0
+            ? pick(this.catalogModels, marked)[0]
+            : this.visibleCatalogModels[this.lists.catalog.selected];
         if (model !== undefined) this.openManual(model);
       } else if (data === "d") this.openDeleteConfirmation();
+      else if (isKey(data, Key.escape) && this.filters.catalog.clear()) this.applyFilter("catalog");
       else if (isKey(data, Key.escape)) return void this.deps.onBack?.();
       else {
-        this.catalogCursor = nextCursor(
-          data,
-          this.catalogCursor,
-          this.catalogModels.length,
-          this.listRows,
-        );
         this.lists.catalog.handleInput(data);
       }
       return this.waitForPending();
     }
     if (isKey(data, Key.escape)) {
+      if (filter.clear()) {
+        this.applyFilter(this.mode);
+        return;
+      }
       this.setMode(this.mode === "endpoint-models" ? "endpoint-provider" : "catalog");
+      return;
+    }
+    if (isKey(data, Key.slash)) {
+      filter.open();
       return;
     }
     this.lists[this.mode].handleInput(data);
     return this.waitForPending();
   }
-
+  isEditing(): boolean {
+    return this.filters[this.mode].isEditing || this.manualForm?.isEditing() || false;
+  }
   hints(): Array<[string, string]> {
     if (this.manualForm !== undefined) return S.hints.form;
     if (this.confirm !== undefined) return S.hints.confirm;
@@ -157,83 +199,80 @@ export class CatalogScreen implements TabComponent {
       ? S.hints.modelManager.catalog
       : S.hints.modelManager.catalogSelect;
   }
-
   helpTitle(): string {
     return this.manualForm === undefined
       ? S.modelManager.catalog.title
       : S.modelManager.catalog.manualTitle;
   }
-
   private setMode(mode: Mode): void {
     this.mode = mode;
     this.error = undefined;
   }
-
-  private confirmSelection(mode: Mode, indices: number[]): void {
-    if (mode === "catalog") {
-      const selected = pick(this.catalogModels, indices);
-      if (this.deps.targetProviderId !== undefined) {
-        this.providerModels = selected;
-        this.start(() => this.saveToProviders([this.deps.targetProviderId as string]));
-      } else {
-        this.enterProviderTargets(selected);
-      }
-      return;
-    }
-    if (mode === "endpoint-provider") {
-      this.beginEndpointSelection(indices);
-      return;
-    }
-    if (mode === "provider-targets") {
-      this.beginProviderSave(indices);
-      return;
-    }
-    this.start(() => this.saveImported(pick(this.importModels, indices)));
+  private applyFilter(mode: Mode): void {
+    const visible = filterCatalogLists(
+      mode,
+      this.filters,
+      this.lists,
+      this.catalogModels,
+      this.providers,
+      this.importModels,
+    );
+    if (visible === undefined) return;
+    this.visibleCatalogModels = visible;
   }
-
+  private confirmSelection(mode: Mode, indices: number[]): void {
+    dispatchCatalogSelection(
+      mode,
+      indices,
+      this.catalogModels,
+      this.importModels,
+      this.deps.targetProviderId,
+      {
+        catalog: (selected, targetProviderId) => {
+          if (targetProviderId === undefined) return this.enterProviderTargets(selected);
+          this.providerModels = selected;
+          this.start(() => this.saveToProviders([targetProviderId]));
+        },
+        endpointProvider: (selected) => this.beginEndpointSelection(selected),
+        providerTargets: (selected) => this.beginProviderSave(selected),
+        imported: (selected) => this.start(() => this.saveImported(selected)),
+      },
+    );
+  }
   private header(): string {
     const title = HEADER[this.mode](this.catalogModels.length);
-    return this.error === undefined ? title : `${title}  ${this.error}`;
+    return this.error === undefined ? title : `${title}  ${theme.danger(this.error)}`;
   }
-
   private syncCatalog(): void {
-    const marked = new Set(
-      pick(this.catalogModels, this.lists.catalog.markedIndices()).map(({ id }) => id),
+    this.catalogModels = syncCatalogList(
+      this.deps.config.get().catalog,
+      this.catalogModels,
+      this.lists.catalog,
     );
-    this.catalogModels = this.deps.config.get().catalog.map((model) => structuredClone(model));
-    this.lists.catalog.setRows(
-      this.catalogModels.map((model) => ({
-        ...catalogRow(model),
-        ...(marked.has(model.id) ? { marked: true } : {}),
-      })),
-    );
-    this.catalogCursor = Math.min(this.catalogCursor, Math.max(0, this.catalogModels.length - 1));
+    this.applyFilter("catalog");
   }
-
   private syncProviders(): void {
-    this.providers = Object.entries(this.models.providers)
-      .filter(([id]) => id !== "failover")
-      .map(([id, node]) => ({ id, node: structuredClone(node) }));
+    this.providers = catalogProviders(this.models);
     this.lists["endpoint-provider"].setRows(this.providers.map(providerRow));
     this.lists["provider-targets"].setRows(this.providers.map(providerRow));
+    this.applyFilter("endpoint-provider");
+    this.applyFilter("provider-targets");
   }
-
   private enterProviderTargets(models: CatalogModel[]): void {
     if (models.length === 0) return;
     this.providerModels = models.map((model) => structuredClone(model));
+    this.filters["provider-targets"].reset();
     this.lists["provider-targets"].setRows(this.providers.map(providerRow));
+    this.applyFilter("provider-targets");
     this.setMode("provider-targets");
   }
-
   private beginEndpointSelection(indices: number[]): void {
-    const providerId = pick(this.providers, indices)[0]?.id;
-    if (providerId !== undefined) this.start(() => this.beginEndpointImport(providerId));
+    const id = pick(this.providers, indices)[0]?.id;
+    if (id !== undefined) this.start(() => this.beginEndpointImport(id));
   }
-
   private beginProviderSave(indices: number[]): void {
     this.start(() => this.saveToProviders(pick(this.providers, indices).map(({ id }) => id)));
   }
-
   private async importBuiltin(): Promise<void> {
     try {
       this.enterImport("builtin-models", await importPiBuiltinCatalog(this.deps.runtimeFactory));
@@ -241,13 +280,13 @@ export class CatalogScreen implements TabComponent {
       this.fail(S.modelManager.catalog.builtinImportFailed);
     }
   }
-
   private enterImport(mode: ImportedMode, models: CatalogModel[]): void {
+    this.filters[mode].reset();
     this.importModels = models;
     this.lists[mode].setRows(models.map(modelRow));
+    this.applyFilter(mode);
     this.setMode(mode);
   }
-
   private saveImported(selected: CatalogModel[]): Promise<void> {
     if (selected.length === 0) {
       this.setMode("catalog");
@@ -260,31 +299,33 @@ export class CatalogScreen implements TabComponent {
       },
     );
   }
-
   private async saveToProviders(providerIds: string[]): Promise<void> {
     if (providerIds.length === 0 || this.providerModels.length === 0) {
       this.setMode("catalog");
       return;
     }
-    try {
-      const nodes = this.providerModels.map(toModelNode);
-      const next = await this.deps.modelsFile.update((models) =>
-        nodes.reduce((current, node) => addModelToProviders(current, providerIds, node), models),
-      );
-      this.models = structuredClone(next);
-      this.syncProviders();
-      this.deps.registrar.syncOwned(next);
-      this.deps.onDone(next);
-      this.setMode("catalog");
-    } catch {
-      this.fail(S.modelManager.catalog.saveFailed);
-    }
+    await persistModelsToProviders(
+      this.deps.modelsFile,
+      this.providerModels,
+      providerIds,
+      (next) => {
+        this.models = structuredClone(next);
+        this.syncProviders();
+        this.deps.registrar.syncOwned(next);
+        this.deps.onDone(next);
+        this.setMode("catalog");
+      },
+      () => this.fail(S.modelManager.catalog.saveFailed),
+    );
   }
-
   private openDeleteConfirmation(): void {
-    const marked = this.lists.catalog.markedIndices();
-    const selected = pick(this.catalogModels, marked.length === 0 ? [this.catalogCursor] : marked);
-    const ids = selected.map(({ id }) => id);
+    if (this.visibleCatalogModels.length === 0) return;
+    const ids = selectedCatalogIds(
+      this.catalogModels,
+      this.visibleCatalogModels,
+      this.lists.catalog.selected,
+      this.lists.catalog.markedIndices(),
+    );
     if (ids.length === 0) return;
     this.confirm = new Confirm(
       S.modelManager.catalog.deleteTitle(ids.length),
@@ -298,16 +339,14 @@ export class CatalogScreen implements TabComponent {
       },
     );
   }
-
   private deleteCatalog(ids: string[]): Promise<void> {
     return this.writeCatalog((catalog) => ids.reduce(removeCatalogModel, catalog));
   }
-
   private openManual(model?: CatalogModel): void {
     this.manualError = undefined;
     this.manualDefaults = structuredClone(model?.defaults ?? CATALOG_DEFAULTS.defaults);
-    this.manualForm = new Form(
-      manualFields(model),
+    this.manualForm = createCatalogManualForm(
+      model,
       (values) => this.start(() => this.saveManual(values)),
       () => {
         this.manualForm = undefined;
@@ -315,26 +354,9 @@ export class CatalogScreen implements TabComponent {
       },
     );
   }
-
   private async saveManual(values: Record<string, unknown>): Promise<void> {
-    const id = typeof values.id === "string" ? values.id.trim() : String();
-    if (id === "") return this.manualFailure(S.modelManager.catalog.invalidId);
-    const contextWindow = values.contextWindow;
-    const maxTokens = values.maxTokens;
-    if (!finite(contextWindow) || !finite(maxTokens)) {
-      return this.manualFailure(S.modelManager.catalog.invalidNumbers);
-    }
-    const name = typeof values.name === "string" ? values.name.trim() : String();
-    const yes = S.modelManager.catalog.boolean.yes;
-    const model: CatalogModel = {
-      id,
-      ...(name === "" ? {} : { name }),
-      reasoning: values.reasoning === yes,
-      vision: values.vision === yes,
-      contextWindow,
-      maxTokens,
-      defaults: structuredClone(this.manualDefaults),
-    };
+    const model = parseCatalogModel(values, this.manualDefaults);
+    if (typeof model === "string") return this.manualFailure(model);
     return this.writeCatalog(
       (catalog) => upsertCatalogModel(catalog, model),
       () => {
@@ -344,54 +366,30 @@ export class CatalogScreen implements TabComponent {
       (message) => this.manualFailure(message),
     );
   }
-
-  private writeCatalog(
+  private async writeCatalog(
     update: (catalog: CatalogModel[]) => CatalogModel[],
     onSuccess: () => void = () => {},
     onFailure: (message: string) => void = (message) => this.fail(message),
   ): Promise<void> {
-    return updateCatalog(this.deps.config, update)
-      .then(() => {
-        this.error = undefined;
-        onSuccess();
-        this.syncCatalog();
-      })
-      .catch(() => onFailure(S.modelManager.catalog.saveFailed));
+    if (!(await persistCatalog(this.deps.config, update)))
+      return onFailure(S.modelManager.catalog.saveFailed);
+    this.error = undefined;
+    onSuccess();
+    this.syncCatalog();
   }
-
   private manualFailure(message: string): void {
     this.manualError = message;
     this.deps.notify(message);
   }
-
-  private renderManual(width: number): string[] {
-    const body = this.manualForm?.render(width) ?? [];
-    if (this.manualError !== undefined) body.push(`    ${this.manualError}`);
-    const focus = this.manualError === undefined ? (this.manualForm?.focus ?? 0) : body.length - 1;
-    return [
-      truncateToWidth(S.modelManager.catalog.manualTitle, width),
-      ...fitCatalogBody(body, width, this.listRows, focus),
-    ];
-  }
-
-  private renderConfirm(width: number): string[] {
-    return [
-      truncateToWidth(this.header(), width),
-      ...fitCatalogBody(this.confirm?.render(width) ?? [], width, this.listRows),
-    ];
-  }
-
   private start(task: () => Promise<void>): void {
     this.pending = task().catch(() => this.fail(S.modelManager.catalog.saveFailed));
   }
-
   private async waitForPending(): Promise<void> {
     const operation = this.pending;
     if (operation === undefined) return;
     await operation;
     if (this.pending === operation) this.pending = undefined;
   }
-
   private fail(message: string): void {
     this.error = message;
     this.mode = "catalog";

@@ -5,6 +5,7 @@ import { redactSecret } from "../../../domain/redact.js";
 import type { ApiType, KeyGroup, ModelsJson } from "../../../domain/types.js";
 import { S } from "../../../strings.js";
 import { type Field, Form } from "../../primitives/form.js";
+import { theme } from "../../primitives/theme.js";
 import type { TabComponent } from "../history.js";
 import type { ModelManagerDeps } from "../modelManager.js";
 
@@ -170,7 +171,7 @@ export class KeyGroupForm implements TabComponent {
   render(width: number, listRows: number): string[] {
     if (this.form.isEditing()) {
       return [
-        truncateToWidth(S.modelManager.keyGroupForm.title, width),
+        truncateToWidth(theme.title(S.modelManager.keyGroupForm.title), width),
         ...this.form.render(width),
       ];
     }
@@ -180,14 +181,15 @@ export class KeyGroupForm implements TabComponent {
       if (index === this.form.focus) focusedLine = body.length;
       body.push(...this.renderField(field, index, width));
     }
-    if (this.error !== undefined) body.push(truncateToWidth(`    ${this.error}`, width));
+    if (this.error !== undefined)
+      body.push(truncateToWidth(theme.danger(`    ${this.error}`), width));
 
     const rows = Math.max(0, listRows);
     const maxStart = Math.max(0, body.length - rows);
     const start = Math.min(maxStart, Math.max(0, focusedLine - rows + 1));
     const visible = body.slice(start, start + rows);
     while (visible.length < rows) visible.push("");
-    return [truncateToWidth(S.modelManager.keyGroupForm.title, width), ...visible];
+    return [truncateToWidth(theme.title(S.modelManager.keyGroupForm.title), width), ...visible];
   }
 
   async handleInput(data: string): Promise<void> {

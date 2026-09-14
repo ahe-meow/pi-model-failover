@@ -1,0 +1,33 @@
+{
+  "unknownRoot": { "keep": true, "nested": [1, { "x": "y" }] },
+  "providers": {
+    "relay": {
+      "name": "Relay",
+      "baseUrl": "https://relay.example/v1",
+      "api": "openai-completions",
+      "apiKey": "fixture-credential-relay",
+      "headers": { "Authorization": "Bearer fixture-credential-relay", "X-Team": "blue" },
+      "models": [
+        {
+          "id": "m",
+          "reasoning": false,
+          "input": ["text"],
+          "contextWindow": 1000,
+          "maxTokens": 100,
+          "cost": { "input": 1, "output": 2, "cacheRead": 3, "cacheWrite": 4 },
+          "unknownModel": { "keep": [true, false] }
+        }
+      ],
+      "piModelFailover": { "group": "kg-1", "costMultiplier": 0.1 },
+      "piModelManager": { "managed": false },
+      "unknownProvider": { "deep": { "keep": "yes" } }
+    },
+    "pmm": {
+      "name": "PMM",
+      "baseUrl": "https://pmm.example/v1",
+      "api": "openai-completions",
+      "models": [],
+      "piModelManager": { "managed": true }
+    }
+  }
+}

@@ -104,6 +104,187 @@ describe("ModelManagerTab provider list and detail", () => {
     expect(detail).not.toContain(LIVE_API_KEY);
   });
 
+  it("filters the provider list with a draft that cancels and an applied query that clears", async () => {
+    const source = structuredClone(models);
+    const relay = copyRelay(source);
+    source.providers.other = {
+      ...relay,
+      name: "Other",
+      apiKey: OTHER_API_KEY,
+      models: [{ ...providerModel, id: "other-model" }],
+    };
+    const deps = await makeDeps(source);
+    const update = vi.spyOn(deps.modelsFile, "update");
+    const tab = new ModelManagerTab(deps);
+
+    tab.handleInput("/");
+    for (const character of "other") await tab.handleInput(character);
+    await tab.handleInput(Key.escape);
+    let list = tab.render(78, 7).join("\n");
+    expect(list).toContain("relay");
+    expect(list).toContain("other");
+
+    tab.handleInput("/");
+    for (const character of "other") await tab.handleInput(character);
+    await tab.handleInput(Key.enter);
+    list = tab.render(78, 7).join("\n");
+    expect(list).toContain("other");
+    expect(list).not.toContain("relay");
+    expect(update).not.toHaveBeenCalled();
+
+    await tab.handleInput(Key.escape);
+    list = tab.render(78, 7).join("\n");
+    expect(list).toContain("relay");
+    expect(list).toContain("other");
+  });
+
+  it("opens the provider-detail filter from Kitty slash input", async () => {
+    const source = structuredClone(models);
+    source.providers.relay = {
+      ...copyRelay(source),
+      models: [
+        { ...providerModel, id: "chat-model", name: "Chat" },
+        { ...providerModel, id: "vision-model", name: "Vision" },
+      ],
+    };
+    const deps = await makeDeps(source);
+    const tab = new ModelManagerTab(deps);
+
+    await tab.handleInput(Key.enter);
+    await tab.handleInput("\u001b[47;1u");
+    for (const character of "vision") await tab.handleInput(character);
+    await tab.handleInput(Key.enter);
+
+    const rendered = tab.render(78, 7).join("\n");
+    expect(rendered).toContain("vision-model");
+    expect(rendered).not.toContain("chat-model");
+  });
+
+  it("keeps provider and detail filter drafts at body height", async () => {
+    const deps = await makeDeps(models);
+    const tab = new ModelManagerTab(deps);
+
+    const listHeight = tab.render(78, 7).length;
+    await tab.handleInput("/");
+    expect(tab.render(78, 7)).toHaveLength(listHeight);
+    await tab.handleInput(Key.escape);
+    await tab.handleInput(Key.enter);
+    const detailHeight = tab.render(78, 7).length;
+    await tab.handleInput("/");
+    expect(tab.render(78, 7)).toHaveLength(detailHeight);
+  });
+
+  it("filters detail models by id or name without writing models.json", async () => {
+    const source = structuredClone(models);
+    source.providers.relay = {
+      ...copyRelay(source),
+      models: [
+        { ...providerModel, id: "chat-model", name: "Chat" },
+        { ...providerModel, id: "vision-model", name: "Vision" },
+      ],
+    };
+    const deps = await makeDeps(source);
+    const update = vi.spyOn(deps.modelsFile, "update");
+    const tab = new ModelManagerTab(deps);
+
+    tab.handleInput(Key.enter);
+    tab.handleInput("/");
+    expect(tab.render(78, 7).join("\n")).toContain(S.filter.inputTitle);
+    expect(tab.render(78, 7).join("\n")).toContain(S.form.cursor);
+    for (const character of "Vision") await tab.handleInput(character);
+    await tab.handleInput(Key.enter);
+
+    let detail = tab.render(78, 7).join("\n");
+    expect(detail).toContain("vision-model");
+    expect(detail).not.toContain("chat-model");
+    expect(update).not.toHaveBeenCalled();
+
+    tab.handleInput("/");
+    for (const character of "Chat") await tab.handleInput(character);
+    await tab.handleInput(Key.escape);
+    detail = tab.render(78, 7).join("\n");
+    expect(detail).toContain("vision-model");
+    expect(detail).not.toContain("chat-model");
+
+    await tab.handleInput(Key.escape);
+    detail = tab.render(78, 7).join("\n");
+    expect(detail).toContain("chat-model");
+  });
+
+  it("preserves marked models while a filter hides them", async () => {
+    const source = structuredClone(models);
+    source.providers.relay = {
+      ...copyRelay(source),
+      models: [
+        { ...providerModel, id: "first-model", name: "First" },
+        { ...providerModel, id: "second-model", name: "Second" },
+      ],
+    };
+    const deps = await makeDeps(source);
+    const update = vi.spyOn(deps.modelsFile, "update");
+    const tab = new ModelManagerTab(deps);
+
+    await tab.handleInput(Key.enter);
+    await tab.handleInput(Key.space);
+    await tab.handleInput("/");
+    for (const character of "second") await tab.handleInput(character);
+    await tab.handleInput(Key.enter);
+    await tab.handleInput("d");
+
+    expect(tab.render(78, 7).join("\n")).toContain("Remove 1 Provider Model?");
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("does nothing for Provider Model actions after a zero-result filter", async () => {
+    const source = structuredClone(models);
+    source.providers.relay = {
+      ...copyRelay(source),
+      models: [
+        { ...providerModel, id: "first-model" },
+        { ...providerModel, id: "second-model" },
+      ],
+    };
+    const deps = await makeDeps(source);
+    const writes = vi.spyOn(deps.modelsFile, "update");
+    const tab = new ModelManagerTab(deps);
+
+    await tab.handleInput(Key.enter);
+    await tab.handleInput(Key.space);
+    await tab.handleInput("/");
+    for (const character of "missing") await tab.handleInput(character);
+    await tab.handleInput(Key.enter);
+    await tab.handleInput("d");
+    expect(tab.render(78, 7).join("\n")).not.toContain(S.modelManager.actions.removeModelsTitle(1));
+    await tab.handleInput("s");
+    expect(tab.render(78, 7).join("\n")).not.toContain(S.modelManager.actions.syncTitle(1));
+    await tab.handleInput(Key.enter);
+
+    const rendered = tab.render(78, 7).join("\n");
+    expect(rendered).not.toContain(S.modelManager.actions.removeModelsTitle(1));
+    expect(rendered).not.toContain(S.modelManager.actions.syncTitle(1));
+    expect(rendered).not.toContain(S.modelManager.modelForm.title);
+    expect(writes).not.toHaveBeenCalled();
+  });
+
+  it("keeps an empty model filter display-only", async () => {
+    const source = structuredClone(models);
+    source.providers.relay = {
+      ...copyRelay(source),
+      models: [{ ...providerModel, id: "chat-model", name: "Chat" }],
+    };
+    const deps = await makeDeps(source);
+    const update = vi.spyOn(deps.modelsFile, "update");
+    const tab = new ModelManagerTab(deps);
+
+    tab.handleInput(Key.enter);
+    tab.handleInput("/");
+    for (const character of "missing") await tab.handleInput(character);
+    await tab.handleInput(Key.enter);
+
+    expect(tab.render(78, 7).join("\n")).not.toContain("chat-model");
+    expect(update).not.toHaveBeenCalled();
+  });
+
   it("C7: provider deletion names affected chains and invokes cleanup", async () => {
     const deps = await makeDeps(models);
     await deps.config.update((config) => {
@@ -156,6 +337,27 @@ describe("ModelManagerTab provider list and detail", () => {
     expect(pmm).toContain("pmm");
     expect(direct).not.toContain("failover");
     expect(direct).not.toContain("pmm");
+  });
+
+  it("does not edit a provider when its filtered list is empty", async () => {
+    const deps = await makeDeps(models);
+    const tab = new ModelManagerTab(deps);
+
+    await tab.handleInput("/");
+    for (const character of "missing") await tab.handleInput(character);
+    await tab.handleInput(Key.enter);
+    await tab.handleInput("r");
+    expect(tab.render(78, 7).join("\n")).not.toContain(S.modelManager.providerForm.renameTitle);
+
+    const multiplierDeps = await makeDeps(models);
+    const multiplierTab = new ModelManagerTab(multiplierDeps);
+    await multiplierTab.handleInput("/");
+    for (const character of "missing") await multiplierTab.handleInput(character);
+    await multiplierTab.handleInput(Key.enter);
+    await multiplierTab.handleInput("m");
+    expect(multiplierTab.render(78, 7).join("\n")).not.toContain(
+      S.modelManager.providerForm.multiplierTitle,
+    );
   });
 
   it("keeps the list and detail data area exactly listRows lines", async () => {

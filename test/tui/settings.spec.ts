@@ -23,10 +23,14 @@ describe("SettingsTab", () => {
     const config = await ConfigStore.open(new MemoryFs(), new WriteQueue(), "/d");
     const t = new SettingsTab(config, async () => 0);
     t.handleInput(Key.enter);
+    t.handleInput(Key.end);
     t.handleInput(Key.backspace);
-    t.handleInput("9");
+    t.handleInput("2");
+    t.handleInput("0");
     t.handleInput(Key.enter);
     for (let i = 0; i < 5; i++) t.handleInput(Key.down);
+    await t.handleInput(Key.enter);
+    expect(config.get().settings.listRows).toBe(7);
     await t.handleInput(Key.enter);
     expect(config.get().settings.listRows).toBe(20);
   });

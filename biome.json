@@ -3,5 +3,15 @@
   "formatter": { "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },
   "linter": { "rules": { "preset": "recommended", "suspicious": { "noExplicitAny": "error" } } },
   "javascript": { "formatter": { "quoteStyle": "double", "semicolons": "always" } },
-  "files": { "includes": ["**", "!!node_modules", "!!.scratch", "!!.atl", "!!.pi", "!!openspec"] }
+  "files": {
+    "includes": [
+      "**",
+      "!!node_modules",
+      "!!.scratch",
+      "!!.atl",
+      "!!.pi",
+      "!!openspec",
+      "!!workflows"
+    ]
+  }
 }

@@ -102,6 +102,143 @@ async function makeHarness(
 }
 
 describe("ChainsTab", () => {
+  it("opens list and detail filters from Kitty slash input", async () => {
+    const { deps } = await makeHarness([
+      chain("other"),
+      chain("zz-chain", [target("first"), target("second")]),
+    ]);
+    const tab = createTab(deps);
+    await vi.waitFor(() => expect(deps.state.read).toHaveBeenCalled());
+
+    await tab.handleInput("\u001b[47;1u");
+    await tab.handleInput("z");
+    await tab.handleInput(Key.enter);
+    expect(tab.render(78, 7).join("\n")).toContain("zz-chain");
+    expect(tab.render(78, 7).join("\n")).not.toContain("other");
+
+    await tab.handleInput(Key.enter);
+    await tab.handleInput("\u001b[47;1u");
+    for (const character of "second") await tab.handleInput(character);
+    await tab.handleInput(Key.enter);
+    expect(tab.render(78, 7).join("\n")).toContain("second/m");
+    expect(tab.render(78, 7).join("\n")).not.toContain("first/m");
+  });
+
+  it.each([
+    ["up", [Key.end, Key.up], "match-6/m"],
+    ["down", [Key.home, Key.down], "match-1/m"],
+    ["page up", [Key.end, Key.pageUp], "match-1/m"],
+    ["page down", [Key.home, Key.pageDown], "match-6/m"],
+    ["home", [Key.end, Key.home], "match-0/m"],
+    ["end", [Key.home, Key.end], "match-7/m"],
+  ])("navigates filtered Chain detail with $0", async (_name, movement, expected) => {
+    const { deps } = await makeHarness([
+      chain(
+        "coding",
+        Array.from({ length: 8 }, (_, index) => target(`match-${index}`)),
+      ),
+    ]);
+    const tab = createTab(deps);
+    await vi.waitFor(() => expect(deps.state.read).toHaveBeenCalled());
+
+    await tab.handleInput(Key.enter);
+    tab.render(78, 7);
+    await tab.handleInput("/");
+    for (const character of "match") await tab.handleInput(character);
+    await tab.handleInput(Key.enter);
+    for (const key of movement) await tab.handleInput(key);
+    await tab.handleInput(Key.enter);
+
+    expect(tab.render(78, 7).join("\n")).toContain(`Target ${expected}`);
+  });
+
+  it("keeps chain list and detail filter drafts at body height", async () => {
+    const { deps } = await makeHarness([chain()]);
+    const tab = createTab(deps);
+    await vi.waitFor(() => expect(deps.state.read).toHaveBeenCalled());
+
+    const listHeight = tab.render(78, 7).length;
+    await tab.handleInput("/");
+    expect(tab.render(78, 7)).toHaveLength(listHeight);
+    await tab.handleInput(Key.escape);
+    await tab.handleInput(Key.enter);
+    const detailHeight = tab.render(78, 7).length;
+    await tab.handleInput("/");
+    expect(tab.render(78, 7)).toHaveLength(detailHeight);
+  });
+
+  it("filters the chain list display-only and preserves cancel and clear behavior", async () => {
+    const { deps, config } = await makeHarness([chain("other"), chain("zz-chain")]);
+    const update = vi.spyOn(config, "update");
+    const tab = createTab(deps);
+    await vi.waitFor(() => expect(deps.state.read).toHaveBeenCalled());
+
+    await tab.handleInput("/");
+    for (const character of "zz") await tab.handleInput(character);
+    await tab.handleInput(Key.escape);
+    let rendered = tab.render(78, 7).join("\n");
+    expect(rendered).toContain("other");
+    expect(rendered).toContain("zz-chain");
+
+    await tab.handleInput("/");
+    for (const character of "ZZ") await tab.handleInput(character);
+    await tab.handleInput(Key.enter);
+    rendered = tab.render(78, 7).join("\n");
+    expect(rendered).toContain("zz-chain");
+    expect(rendered).not.toContain("other");
+    expect(update).not.toHaveBeenCalled();
+
+    await tab.handleInput(Key.escape);
+    expect(tab.render(78, 7).join("\n")).toContain("other");
+  });
+
+  it("filters chain targets and keeps the selected target mapped to its source", async () => {
+    const { deps, config } = await makeHarness([
+      chain("coding", [target("first"), target("second"), target("third")]),
+    ]);
+    const update = vi.spyOn(config, "update");
+    const tab = createTab(deps);
+    await vi.waitFor(() => expect(deps.state.read).toHaveBeenCalled());
+
+    await tab.handleInput(Key.enter);
+    await tab.handleInput("/");
+    for (const character of "SECOND") await tab.handleInput(character);
+    await tab.handleInput(Key.enter);
+    let rendered = tab.render(78, 7).join("\n");
+    expect(rendered).toContain("second/m");
+    expect(rendered).not.toContain("first/m");
+    expect(update).not.toHaveBeenCalled();
+
+    await tab.handleInput(Key.enter);
+    expect(tab.render(78, 7).join("\n")).toContain("Target second/m");
+    await tab.handleInput(Key.escape);
+    await tab.handleInput(Key.escape);
+    rendered = tab.render(78, 7).join("\n");
+    expect(rendered).toContain("first/m");
+  });
+
+  it("keeps a filtered target selected after moving across a hidden target", async () => {
+    const { deps, config } = await makeHarness([
+      chain("coding", [target("match-a"), target("hidden"), target("match-b")]),
+    ]);
+    const tab = createTab(deps);
+    await vi.waitFor(() => expect(deps.state.read).toHaveBeenCalled());
+
+    await tab.handleInput(Key.enter);
+    await tab.handleInput("/");
+    for (const character of "match") await tab.handleInput(character);
+    await tab.handleInput(Key.enter);
+    await tab.handleInput("J");
+
+    expect(config.get().chains[0]?.targets).toEqual([
+      target("hidden"),
+      target("match-a"),
+      target("match-b"),
+    ]);
+    await tab.handleInput(Key.enter);
+    expect(tab.render(78, 7).join("\n")).toContain("Target match-a/m");
+  });
+
   it("renders chains and opens detail on Enter, then returns with Esc", async () => {
     const { deps } = await makeHarness([chain(), chain("review")]);
     const tab = createTab(deps);
@@ -109,6 +246,7 @@ describe("ChainsTab", () => {
 
     expect(tab.render(78, 7)).toHaveLength(8);
     expect(tab.render(78, 7).join("\n")).toContain("coding");
+    expect(tab.render(78, 7).join("\n")).toContain("\x1b[92mok\x1b[39m");
 
     await tab.handleInput(Key.enter);
     expect(tab.render(78, 7).join("\n")).toContain("relay/m");
@@ -124,6 +262,7 @@ describe("ChainsTab", () => {
     tab.handleInput("a");
     await tab.handleInput(Key.down);
     await tab.handleInput(Key.enter);
+    expect(deps.notify).not.toHaveBeenCalled();
     for (const character of "New Chain") await tab.handleInput(character);
     await tab.handleInput(Key.enter);
     await tab.handleInput(Key.enter);

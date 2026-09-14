@@ -6,12 +6,15 @@ import type { Chain, FailoverEvent, TargetRef } from "../../domain/types.js";
 import type { HistoryLog } from "../../history/historyLog.js";
 import { S } from "../../strings.js";
 import { ScrollList } from "../primitives/scrollList.js";
+import { tableColumns } from "../primitives/table.js";
+import { filterRows, renderFilterDraft, TextFilter } from "../primitives/textFilter.js";
+import { theme } from "../primitives/theme.js";
 import { manualEvent, move, targetRef } from "./chains/support.js";
 
 export interface TabComponent {
   render(width: number, listRows: number): string[];
   handleInput(data: string): void | Promise<void>;
-  isEditing?(): boolean;
+  isEditing(): boolean;
   hints(): Array<[string, string]>;
   helpTitle(): string;
 }
@@ -66,7 +69,10 @@ function targetFor(chain: Chain, ref: TargetRef): boolean {
 }
 
 export class HistoryTab implements TabComponent {
-  private readonly list = new ScrollList({ listRows: 7 });
+  private readonly list = new ScrollList({
+    listRows: 7,
+    columns: tableColumns(S.history.header),
+  });
   private readonly picker = new ScrollList({ listRows: 7 });
   private readonly detail = new ScrollList({ listRows: 7 });
   private events: FailoverEvent[] = [];
@@ -75,6 +81,10 @@ export class HistoryTab implements TabComponent {
   private pickerKind: PickerKind | undefined;
   private pickerValues: string[] = [];
   private detailOpen = false;
+  private readonly listFilter = new TextFilter();
+  private readonly pickerFilter = new TextFilter();
+  private visibleEvents: FailoverEvent[] = [];
+  private visiblePickerValues: string[] = [];
 
   constructor(private readonly deps: HistoryDeps) {
     void this.refresh();
@@ -92,6 +102,7 @@ export class HistoryTab implements TabComponent {
           ? result.events.filter((event) => this.eventChainId(event) === filter.value)
           : result.events;
       this.dropped = result.dropped;
+      this.setVisibleEvents();
     } catch {
       this.deps.notify(S.history.refreshFailed);
     }
@@ -101,6 +112,9 @@ export class HistoryTab implements TabComponent {
     this.list.setListRows(listRows);
     this.picker.setListRows(listRows);
     this.detail.setListRows(listRows);
+    const filter = this.pickerKind === undefined ? this.listFilter : this.pickerFilter;
+    if (filter.isEditing)
+      return renderFilterDraft(width, S.filter.inputTitle, filter, Math.max(0, listRows) + 1);
     if (this.pickerKind !== undefined) return this.renderPicker(width);
     if (this.detailOpen) return this.renderDetail(width);
     return this.renderList(width);
@@ -117,7 +131,15 @@ export class HistoryTab implements TabComponent {
       else move(this.detail, data);
       return;
     }
-    if (data === "f") {
+    if (this.listFilter.isEditing) {
+      if (this.listFilter.handleInput(data) === "applied") await this.refresh();
+      return;
+    }
+    if (isKey(data, Key.slash)) {
+      this.listFilter.open();
+    } else if (isKey(data, Key.escape) && this.listFilter.clear()) {
+      await this.refresh();
+    } else if (data === "f") {
       await this.openPicker("chain");
     } else if (data === "p") {
       await this.openPicker("provider");
@@ -128,6 +150,9 @@ export class HistoryTab implements TabComponent {
     else move(this.list, data);
   }
 
+  isEditing(): boolean {
+    return this.listFilter.isEditing || this.pickerFilter.isEditing;
+  }
   hints(): Array<[string, string]> {
     if (this.pickerKind !== undefined) return S.hints.history.filter;
     if (this.detailOpen) return S.hints.history.detail;
@@ -139,52 +164,95 @@ export class HistoryTab implements TabComponent {
   }
 
   private renderList(width: number): string[] {
-    this.list.setRows(
-      this.events.map((event) => ({
-        text: S.history.row(
-          displayTime(event.ts, this.deps.now()),
-          this.eventChain(event),
-          event.from,
-          event.to ?? S.history.none,
-          event.reason === "manual" ? S.history.reset : event.reason,
-          event.elapsedMs,
-        ),
-      })),
+    this.setVisibleEvents();
+    const suffix =
+      this.dropped === 0 ? String() : theme.muted(`  ${S.history.dropped(this.dropped)}`);
+    return [
+      truncateToWidth(`${this.list.header(width)}${suffix}`, width),
+      ...this.list.render(width),
+    ];
+  }
+
+  private setVisibleEvents(): void {
+    const filtered = filterRows(
+      this.events,
+      (event) => this.eventRow(event),
+      this.listFilter.query,
     );
-    const header = this.dropped === 0 ? S.history.header : S.history.headerDropped(this.dropped);
-    return [truncateToWidth(header, width), ...this.list.render(width)];
+    this.visibleEvents = filtered.map(({ item }) => item);
+    this.list.setRows(filtered.map(({ row }) => row));
+  }
+
+  private eventRow(event: FailoverEvent): { text: string; cells: string[] } {
+    const cells = [
+      displayTime(event.ts, this.deps.now()),
+      this.eventChain(event),
+      event.from,
+      event.to ?? S.history.none,
+      event.reason === "manual" ? S.history.reset : event.reason,
+      String(event.elapsedMs),
+    ];
+    return { text: cells.join("  "), cells };
   }
 
   private renderPicker(width: number): string[] {
     const kind = this.pickerKind;
     if (kind === undefined) return [];
-    return [truncateToWidth(S.history.filter.title(kind), width), ...this.picker.render(width)];
+    return [
+      theme.title(truncateToWidth(S.history.filter.title(kind), width)),
+      ...this.picker.render(width),
+    ];
   }
 
   private renderDetail(width: number): string[] {
     const event = this.selectedEvent();
     if (event === undefined) return [];
-    return [truncateToWidth(S.history.detailHeader, width), ...this.detail.render(width)];
+    return [
+      theme.title(truncateToWidth(S.history.detailHeader, width)),
+      ...this.detail.render(width),
+    ];
   }
 
   private async openPicker(kind: PickerKind): Promise<void> {
     try {
       this.pickerKind = kind;
+      this.pickerFilter.reset();
       this.pickerValues = kind === "chain" ? this.chainOptions() : await this.providerOptions();
-      this.picker.setRows(
-        this.pickerValues.map((value) => ({
-          text: kind === "chain" ? this.chainLabel(value) : value,
-        })),
-      );
+      this.setPickerRows();
     } catch {
       this.pickerKind = undefined;
       this.deps.notify(S.history.refreshFailed);
     }
   }
 
+  private setPickerRows(): void {
+    const kind = this.pickerKind;
+    if (kind === undefined) return;
+    const filtered = filterRows(
+      this.pickerValues,
+      (value) => ({ text: kind === "chain" ? this.chainLabel(value) : value }),
+      this.pickerFilter.query,
+    );
+    this.visiblePickerValues = filtered.map(({ item }) => item);
+    this.picker.setRows(filtered.map(({ row }) => row));
+  }
+
   private async handlePicker(data: string): Promise<void> {
+    if (this.pickerFilter.isEditing) {
+      if (this.pickerFilter.handleInput(data) === "applied") this.setPickerRows();
+      return;
+    }
     if (isKey(data, Key.escape)) {
+      if (this.pickerFilter.clear()) {
+        this.setPickerRows();
+        return;
+      }
       this.pickerKind = undefined;
+      this.pickerFilter.reset();
+      return;
+    }
+    if (isKey(data, Key.slash)) {
+      this.pickerFilter.open();
       return;
     }
     if (data === "c") {
@@ -196,11 +264,12 @@ export class HistoryTab implements TabComponent {
       move(this.picker, data);
       return;
     }
-    const value = this.pickerValues[this.picker.selected];
+    const value = this.visiblePickerValues[this.picker.selected];
     const kind = this.pickerKind;
     if (value === undefined || kind === undefined) return;
     this.filter = { kind, value };
     this.pickerKind = undefined;
+    this.pickerFilter.reset();
     await this.refresh();
   }
 
@@ -237,7 +306,7 @@ export class HistoryTab implements TabComponent {
   }
 
   private selectedEvent(): FailoverEvent | undefined {
-    return this.events[this.list.selected];
+    return this.visibleEvents[this.list.selected];
   }
 
   private eventChain(event: FailoverEvent): string {
@@ -270,6 +339,6 @@ export class HistoryTab implements TabComponent {
           ...(event.to ? [providerOf(event.to)] : []),
         ]),
       ),
-    ].sort();
+    ].sort((a, b) => a.localeCompare(b));
   }
 }

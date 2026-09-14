@@ -5,6 +5,7 @@ import type { ErrorHandlingMode, TtftAction } from "../../domain/types.js";
 import { S } from "../../strings.js";
 import { Confirm } from "../primitives/confirm.js";
 import { type Field, Form } from "../primitives/form.js";
+import { theme } from "../primitives/theme.js";
 import type { TabComponent } from "./history.js";
 
 function isKey(data: string, key: KeyId): boolean {
@@ -70,6 +71,7 @@ export class SettingsTab implements TabComponent {
   private form: Form;
   private confirm: Confirm | null = null;
   private onReset = false;
+  private pendingSave: Promise<void> | undefined;
 
   constructor(
     private config: ConfigStore,
@@ -139,7 +141,9 @@ export class SettingsTab implements TabComponent {
     ];
     return new Form(
       fields,
-      (values) => void this.save(values),
+      (values) => {
+        this.pendingSave = this.save(values);
+      },
       () => {},
     );
   }
@@ -188,11 +192,16 @@ export class SettingsTab implements TabComponent {
     if (this.confirm) {
       const body = this.confirm.render(width).slice(0, listRows);
       while (body.length < listRows) body.push("");
-      return [S.settingsHeader, ...body];
+      return [truncateToWidth(theme.title(S.settingsHeader), width), ...body];
     }
-    const button = this.onReset ? `\x1b[7m[ ${S.resetAll} ]\x1b[27m` : `  [ ${S.resetAll} ]`;
+    const button = this.onReset
+      ? `\x1b[7m${theme.danger(`[ ${S.resetAll} ]`)}\x1b[27m`
+      : theme.danger(`  [ ${S.resetAll} ]`);
     const body = [...this.form.render(width), truncateToWidth(button, width)];
-    return [S.settingsHeader, ...this.visibleBody(body, listRows)];
+    return [
+      truncateToWidth(theme.title(S.settingsHeader), width),
+      ...this.visibleBody(body, listRows),
+    ];
   }
 
   capturesNumericInput(): boolean {
@@ -236,14 +245,22 @@ export class SettingsTab implements TabComponent {
       return;
     }
     if (isKey(data, Key.enter)) {
-      if (!this.form.isEditing() && this.form.focus === 5) {
-        await this.save(this.form.values());
-      } else {
-        this.form.handleInput(data);
-      }
+      this.form.handleInput(data);
+      await this.waitForSave();
       return;
     }
     this.form.handleInput(data);
+  }
+
+  private async waitForSave(): Promise<void> {
+    const pending = this.pendingSave;
+    if (pending === undefined) return;
+    await pending;
+    if (this.pendingSave === pending) this.pendingSave = undefined;
+  }
+
+  isEditing(): boolean {
+    return this.form.isEditing();
   }
 
   hints(): Array<[string, string]> {

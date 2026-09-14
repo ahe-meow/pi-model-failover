@@ -1,10 +1,13 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { createTable, type TableColumn } from "./table.js";
+import { theme } from "./theme.js";
 
 const HIGHLIGHT_START = "\x1b[7m";
 const HIGHLIGHT_END = "\x1b[27m";
 
 export interface Row {
   text: string;
+  cells?: string[];
   marked?: boolean;
 }
 
@@ -13,7 +16,13 @@ export class ScrollList {
   private top = 0;
   selected = 0;
 
-  constructor(private opts: { listRows: number; multiSelect?: boolean }) {}
+  constructor(
+    private opts: {
+      listRows: number;
+      multiSelect?: boolean;
+      columns?: readonly TableColumn[];
+    },
+  ) {}
 
   setRows(rows: Row[]): void {
     this.rows = rows;
@@ -59,10 +68,31 @@ export class ScrollList {
     this.move(Infinity);
   }
 
+  header(width: number): string {
+    const columns = this.opts.columns;
+    if (columns === undefined) return "";
+    const overflow = this.rows.length > this.opts.listRows;
+    const table = createTable(
+      columns,
+      this.rows.map((row) => row.cells ?? [row.text]),
+      this.tableWidth(width, overflow),
+    );
+    const prefix = this.opts.multiSelect ? " ".repeat(4) : String();
+    return theme.header(truncateToWidth(`${prefix}${table.header}`, width));
+  }
+
   render(width: number): string[] {
     const listRows = this.opts.listRows;
     const overflow = this.rows.length > listRows;
     const textWidth = overflow ? width - 2 : width;
+    const table =
+      this.opts.columns === undefined
+        ? undefined
+        : createTable(
+            this.opts.columns,
+            this.rows.map((row) => row.cells ?? [row.text]),
+            this.tableWidth(width, overflow),
+          );
     const thumbLength = overflow
       ? Math.max(1, Math.round((listRows * listRows) / this.rows.length))
       : 0;
@@ -74,7 +104,7 @@ export class ScrollList {
     for (let i = 0; i < listRows; i++) {
       const row = this.rows[this.top + i];
       let text = "";
-      if (row) text = `${this.markFor(row)}${row.text}`;
+      if (row) text = `${this.markFor(row)}${table?.row(row.cells ?? [row.text]) ?? row.text}`;
       text = truncateToWidth(text, textWidth);
       text += " ".repeat(Math.max(0, textWidth - visibleWidth(text)));
       if (this.top + i === this.selected && row) {
@@ -85,6 +115,11 @@ export class ScrollList {
     }
 
     return output;
+  }
+
+  private tableWidth(width: number, overflow: boolean): number {
+    const textWidth = overflow ? width - 2 : width;
+    return textWidth - (this.opts.multiSelect ? 4 : 0);
   }
 
   private markFor(row: Row): string {

@@ -74,6 +74,8 @@ describe("TargetForm", () => {
 
     for (let index = 0; index < 6; index++) await form.handleInput(Key.down);
     await form.handleInput(Key.enter);
+    expect(update).not.toHaveBeenCalled();
+    await form.handleInput(Key.enter);
 
     expect(update).toHaveBeenCalledTimes(1);
     expect(deps.registrar.syncFailover).toHaveBeenCalledTimes(1);

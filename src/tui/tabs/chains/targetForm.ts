@@ -9,6 +9,7 @@ import type {
 } from "../../../domain/types.js";
 import { S } from "../../../strings.js";
 import { type Field, Form } from "../../primitives/form.js";
+import { theme } from "../../primitives/theme.js";
 import type { TabComponent } from "../history.js";
 
 const E = String();
@@ -187,7 +188,7 @@ export class TargetForm implements TabComponent {
     const target = chain?.targets[this.options.targetIndex];
     const ref = target === undefined ? E : `${target.provider}/${target.modelId}`;
     return [
-      truncateToWidth(S.chains.targetForm.title(ref), width),
+      theme.title(truncateToWidth(S.chains.targetForm.title(ref), width)),
       ...fitBody(this.form.render(width), width, rows),
     ];
   }
