@@ -3,13 +3,13 @@ import { classify } from "../../src/domain/failureClass.js";
 
 describe("classify", () => {
   it.each([
-    [{ status: 401 }, "persistent", "persistent"],
-    [{ status: 403 }, "persistent", "persistent"],
-    [{ status: 404 }, "persistent", "persistent"],
-    [{ status: 402 }, "persistent", "persistent"],
-    [{ status: 429, body: "QUOTA exhausted" }, "persistent", "persistent"],
-    [{ status: 429, body: "insufficient_QUOTA" }, "persistent", "persistent"],
-    [{ status: 429, body: "BILLING account disabled" }, "persistent", "persistent"],
+    [{ status: 401 }, "persistent", "http-401"],
+    [{ status: 403 }, "persistent", "http-403"],
+    [{ status: 404 }, "persistent", "http-404"],
+    [{ status: 402 }, "persistent", "http-402"],
+    [{ status: 429, body: "QUOTA exhausted" }, "persistent", "http-429"],
+    [{ status: 429, body: "insufficient_QUOTA" }, "persistent", "http-429"],
+    [{ status: 429, body: "BILLING account disabled" }, "persistent", "http-429"],
     [{ status: 429 }, "cooldown", "http-429"],
     [{ status: 500 }, "cooldown", "http-500"],
     [{ status: 503 }, "cooldown", "http-503"],
@@ -82,7 +82,14 @@ describe("classify", () => {
   it("applies persistent status precedence over network codes", () => {
     expect(classify({ status: 401, code: "ECONNRESET", sentParams: [] })).toEqual({
       cls: "persistent",
-      reason: "persistent",
+      reason: "http-401",
+    });
+  });
+
+  it("keeps the persistent class while reporting the real quota status reason", () => {
+    expect(classify({ status: 429, body: "quota exceeded", sentParams: [] })).toMatchObject({
+      cls: "persistent",
+      reason: "http-429",
     });
   });
 });

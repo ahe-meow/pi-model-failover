@@ -67,6 +67,18 @@ describe("TargetForm", () => {
     expect(form.render(120, 7).join("\n")).toContain(S.abortWarning);
   });
 
+  it("offers inherit plus the six reasoning levels in order", async () => {
+    const form = new TargetForm(await makeDeps());
+    const rendered = form.render(160, 7).join("\n");
+    const options = ["inherit", "off", "low", "medium", "high", "xhigh", "max"];
+    expect(options.every((option) => rendered.includes(option))).toBe(true);
+    expect(rendered).not.toContain("minimal");
+    const positions = options.map((option) => rendered.indexOf(option));
+    expect(
+      positions.every((position, index) => index === 0 || position > (positions[index - 1] ?? -1)),
+    ).toBe(true);
+  });
+
   it("saves target settings through one ConfigStore update", async () => {
     const deps = await makeDeps();
     const update = vi.spyOn(deps.config, "update");
@@ -75,7 +87,7 @@ describe("TargetForm", () => {
     for (let index = 0; index < 6; index++) await form.handleInput(Key.down);
     await form.handleInput(Key.enter);
     expect(update).not.toHaveBeenCalled();
-    await form.handleInput(Key.enter);
+    await form.handleInput(Key.ctrl("s"));
 
     expect(update).toHaveBeenCalledTimes(1);
     expect(deps.registrar.syncFailover).toHaveBeenCalledTimes(1);

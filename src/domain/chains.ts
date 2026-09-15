@@ -8,6 +8,7 @@ import type {
   TargetRef,
   TargetSettings,
 } from "./types.js";
+import { normalizeReasoningEffort, normalizeThinkingLevelMap } from "./types.js";
 
 const clone = <T>(value: T): T => structuredClone(value);
 
@@ -31,6 +32,25 @@ export function removeChain(chains: Chain[], id: string): Chain[] {
   return clone(chains).filter((chain) => chain.id !== id);
 }
 
+export function renameChain(chains: Chain[], oldId: string, id: string, name: string): Chain[] {
+  const next = clone(chains);
+  if (id !== oldId && next.some((chain) => chain.id === id)) return next;
+  const index = next.findIndex((chain) => chain.id === oldId);
+  const current = next[index];
+  if (current !== undefined) next[index] = { ...current, id, name };
+  return next;
+}
+
+export function renameProviderRefs(chains: Chain[], oldId: string, newId: string): Chain[] {
+  if (oldId === newId) return clone(chains);
+  return clone(chains).map((chain) => ({
+    ...chain,
+    targets: chain.targets.map((target) =>
+      target.provider === oldId ? { ...target, provider: newId } : target,
+    ),
+  }));
+}
+
 export function moveTarget(chain: Chain, index: number, delta: -1 | 1): Chain {
   const next = clone(chain);
   const destination = index + delta;
@@ -50,6 +70,22 @@ export function moveTarget(chain: Chain, index: number, delta: -1 | 1): Chain {
   next.targets[index] = other;
   next.targets[destination] = current;
   return next;
+}
+
+export type CostMultiplierSortDirection = "asc" | "desc";
+
+export function sortTargetsByCostMultiplier(
+  targets: readonly Target[],
+  models: ModelsJson,
+  direction: CostMultiplierSortDirection,
+): Target[] {
+  const next = clone([...targets]);
+  return next.sort((left, right) => {
+    const difference =
+      (models.providers[left.provider]?.piModelFailover?.costMultiplier ?? 1) -
+      (models.providers[right.provider]?.piModelFailover?.costMultiplier ?? 1);
+    return direction === "asc" ? difference : -difference;
+  });
 }
 
 export function addTargets(chain: Chain, refs: TargetRef[]): Chain {
@@ -108,14 +144,20 @@ export function virtualModelNode(chain: Chain, models: ModelsJson): ModelNode | 
   );
   if (!source) return null;
 
-  return { ...clone(source), id: chain.id, name: chain.name };
+  const thinkingLevelMap = normalizeThinkingLevelMap(source.reasoning, source.thinkingLevelMap);
+  return {
+    ...clone(source),
+    id: chain.id,
+    name: chain.name,
+    ...(thinkingLevelMap === undefined ? {} : { thinkingLevelMap }),
+  };
 }
 
 export function resolveTargetSettings(target: Target, settings: Settings): TargetSettings {
   return {
     errorHandlingMode: target.errorHandlingMode ?? settings.errorHandlingMode,
     maxRetries: target.maxRetries ?? settings.maxRetries,
-    reasoningEffort: target.reasoningEffort ?? settings.reasoningEffort,
+    reasoningEffort: normalizeReasoningEffort(target.reasoningEffort ?? settings.reasoningEffort),
     modelParameters: clone(target.modelParameters ?? settings.modelParameters),
     noProgressTimeoutSeconds: target.noProgressTimeoutSeconds ?? settings.noProgressTimeoutSeconds,
     ttftTimeoutSeconds: target.ttftTimeoutSeconds ?? settings.ttftTimeoutSeconds,

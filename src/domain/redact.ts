@@ -2,6 +2,19 @@ import type { ProviderNode } from "./types.js";
 
 const ENV_REF = /^\$\{?[A-Z_][A-Z0-9_]*\}?$/;
 const SECRET_HEADER = /key|token|auth/i;
+const SECRET_ASSIGNMENT =
+  /(["']?(?:api[_-]?key|apikey|authorization|auth|token|secret|bearer)["']?\s*[:=]\s*)(["']?)((?:bearer|basic|token)\s+)?([^\s"',}]+)/gi;
+const BARE_TOKEN = /\bsk-[A-Za-z0-9_-]{8,}/g;
+
+export function redactFailureBody(body: string): string {
+  return body
+    .replace(
+      SECRET_ASSIGNMENT,
+      (_match, prefix: string, quote: string, scheme: string | undefined, value: string) =>
+        `${prefix}${quote}${scheme ?? ""}${redactSecret(value)}`,
+    )
+    .replace(BARE_TOKEN, (token) => redactSecret(token));
+}
 
 export function redactSecret(value: string): string {
   if (ENV_REF.test(value)) return value;

@@ -4,10 +4,11 @@ import {
   type AssistantMessageEvent,
   type AssistantMessageEventStream,
   type Context,
+  clampThinkingLevel,
   createAssistantMessageEventStream,
   type Model,
+  type ModelThinkingLevel,
   type SimpleStreamOptions,
-  type ThinkingLevel,
 } from "@earendil-works/pi-ai";
 import type { ProviderConfig } from "@earendil-works/pi-coding-agent";
 import type { ConfigStore } from "../config/configStore.js";
@@ -16,6 +17,7 @@ import { virtualModelNode } from "../domain/chains.js";
 import { type Attempt, type EngineDeps, runChain, type StreamChunk } from "../domain/engine.js";
 import type { Clock } from "../domain/ports.js";
 import type { ModelsJson, TargetRef, TargetSettings } from "../domain/types.js";
+import { normalizeReasoningEffort, normalizeThinkingLevelMap } from "../domain/types.js";
 import type { HistoryLog } from "../history/historyLog.js";
 import { S } from "../strings.js";
 
@@ -51,7 +53,7 @@ export interface FailoverProviderDeps {
   history: HistoryLog;
   clock: Clock;
   sessionId: string;
-  thinkingLevel: () => ThinkingLevel;
+  thinkingLevel: () => ModelThinkingLevel;
 }
 
 type FailureError = Error & {
@@ -141,9 +143,22 @@ function normalizeFailure(
 
 function thinkingFor(
   reasoningEffort: TargetSettings["reasoningEffort"],
-  inherit: ThinkingLevel,
-): ThinkingLevel {
-  return reasoningEffort === "inherit" ? inherit : reasoningEffort;
+  inherit: ModelThinkingLevel,
+  model: Model<Api>,
+): ModelThinkingLevel | undefined {
+  const selected = normalizeReasoningEffort(reasoningEffort);
+  if (!model.reasoning || selected === "off") return undefined;
+  if (selected !== "inherit") return selected;
+
+  const inherited = inherit === "minimal" ? "low" : inherit;
+  if (inherited === "off") return undefined;
+  const thinkingLevelMap = normalizeThinkingLevelMap(true, model.thinkingLevelMap) ?? {};
+  const clampModel = {
+    ...model,
+    thinkingLevelMap: { ...thinkingLevelMap, minimal: null },
+  } as Model<Api>;
+  const clamped = clampThinkingLevel(clampModel, inherited);
+  return clamped === "off" || clamped === "minimal" ? undefined : clamped;
 }
 
 function targetParts(ref: TargetRef): { provider: string; modelId: string } {
@@ -241,7 +256,6 @@ export function createFailoverProvider(deps: FailoverProviderDeps): {
     const sentOptions: Record<string, unknown> = {
       ...baseOptions,
       ...targetSettings.modelParameters,
-      reasoning: thinkingFor(targetSettings.reasoningEffort, deps.thinkingLevel()),
     };
     if (sentOptions.apiKey === FAILOVER_API_KEY) delete sentOptions.apiKey;
     for (const parameter of stripped) delete sentOptions[parameter];
@@ -250,6 +264,9 @@ export function createFailoverProvider(deps: FailoverProviderDeps): {
     if (registry === undefined) throw failureError({ status: 503 }, sentParams);
     const model = registry.find(providerId, modelId);
     if (model === undefined) throw failureError({ status: 404 }, sentParams);
+    const reasoning = thinkingFor(targetSettings.reasoningEffort, deps.thinkingLevel(), model);
+    if (reasoning === undefined) delete sentOptions.reasoning;
+    else sentOptions.reasoning = reasoning;
 
     let auth: ResolvedRequestAuth;
     try {

@@ -123,6 +123,52 @@ describe("ModelsJsonFile", () => {
     expect(result.unknownRoot).toEqual({ keep: true });
   });
 
+  it("normalizes reasoning capability maps for Pi with an explicit minimal null", async () => {
+    const fs = new MemoryFs();
+    fs.files.set(
+      path,
+      JSON.stringify({
+        providers: {
+          relay: {
+            ...validProvider,
+            models: [
+              { ...validModel, id: "default", reasoning: true },
+              {
+                ...validModel,
+                id: "mapped",
+                reasoning: true,
+                thinkingLevelMap: {
+                  minimal: "minimal",
+                  low: "low",
+                  medium: "medium",
+                  high: "high",
+                  xhigh: "xhigh",
+                  max: "max",
+                },
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    const result = await new ModelsJsonFile(fs, new WriteQueue(), path).read();
+
+    expect(result.providers.relay?.models[0]?.thinkingLevelMap).toEqual({
+      xhigh: "xhigh",
+      max: "max",
+      minimal: null,
+    });
+    expect(result.providers.relay?.models[1]?.thinkingLevelMap).toEqual({
+      minimal: null,
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    });
+  });
+
   it("keeps extension writes strict after permissive reads", async () => {
     const fs = new MemoryFs();
     fs.files.set(

@@ -35,10 +35,12 @@ const ERROR_OPTIONS: readonly Option<ErrorHandlingMode>[] = [
 ];
 const REASONING_OPTIONS: readonly Option<TargetSettings["reasoningEffort"]>[] = [
   { value: "inherit", label: S.chains.targetForm.options.reasoningEffort.inherit },
-  { value: "minimal", label: S.chains.targetForm.options.reasoningEffort.minimal },
+  { value: "off", label: S.chains.targetForm.options.reasoningEffort.off },
   { value: "low", label: S.chains.targetForm.options.reasoningEffort.low },
   { value: "medium", label: S.chains.targetForm.options.reasoningEffort.medium },
   { value: "high", label: S.chains.targetForm.options.reasoningEffort.high },
+  { value: "xhigh", label: S.chains.targetForm.options.reasoningEffort.xhigh },
+  { value: "max", label: S.chains.targetForm.options.reasoningEffort.max },
 ];
 const TTFT_OPTIONS: readonly Option<TargetSettings["ttftAction"]>[] = [
   { value: "cooldown-only", label: S.chains.targetForm.options.ttftAction.cooldownOnly },

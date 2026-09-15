@@ -1,3 +1,4 @@
+import { type Api, getSupportedThinkingLevels, type Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   addTargets,
@@ -6,8 +7,11 @@ import {
   moveTarget,
   removeChain,
   removeTarget,
+  renameChain,
+  renameProviderRefs,
   resolveTargetSettings,
   sameModelImport,
+  sortTargetsByCostMultiplier,
   upsertChain,
   virtualModelNode,
 } from "../../src/domain/chains.js";
@@ -20,6 +24,7 @@ import type {
   Target,
   TargetRef,
 } from "../../src/domain/types.js";
+import { normalizeThinkingLevelMap } from "../../src/domain/types.js";
 
 const model = (id: string, overrides: Partial<ModelNode> = {}): ModelNode => ({
   id,
@@ -31,6 +36,14 @@ const model = (id: string, overrides: Partial<ModelNode> = {}): ModelNode => ({
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   ...overrides,
 });
+
+const supportedThinkingLevels = (thinkingLevelMap: ModelNode["thinkingLevelMap"]) =>
+  getSupportedThinkingLevels({
+    ...model("m"),
+    api: "openai-completions",
+    provider: "relay",
+    thinkingLevelMap,
+  } as unknown as Model<Api>);
 
 const provider = (id: string, ...models: ModelNode[]): ProviderNode => ({
   name: id,
@@ -90,6 +103,64 @@ describe("chains", () => {
     ]);
     expect(result.targets[0]).not.toBe(input.targets[0]);
     expect(input.targets).toEqual([{ provider: "keep", modelId: "m", maxRetries: 2 }]);
+  });
+
+  it("renames a chain in place without changing its target order", () => {
+    const input = [
+      chain([{ provider: "relay", modelId: "m" }]),
+      { ...chain([]), id: "review", name: "Review" },
+    ];
+
+    const result = renameChain(input, "coding", "primary", "Primary");
+
+    expect(result.map(({ id }) => id)).toEqual(["primary", "review"]);
+    expect(result[0]).toEqual({
+      id: "primary",
+      name: "Primary",
+      targets: [{ provider: "relay", modelId: "m" }],
+    });
+    expect(result[0]).not.toBe(input[0]);
+    expect(input[0]?.id).toBe("coding");
+  });
+
+  it("normalizes reasoning maps for Pi and preserves non-reasoning maps", () => {
+    const allLevels = {
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    };
+    const supported = ["off", "low", "medium", "high", "xhigh", "max"];
+
+    const defaultMap = normalizeThinkingLevelMap(true);
+    expect(defaultMap).toEqual({ xhigh: "xhigh", max: "max", minimal: null });
+    expect(supportedThinkingLevels(defaultMap)).toEqual(supported);
+
+    const legacyMap = normalizeThinkingLevelMap(true, allLevels);
+    expect(legacyMap).toEqual({ ...allLevels, minimal: null });
+    expect(supportedThinkingLevels(legacyMap)).toEqual(supported);
+
+    const explicitNullMap = normalizeThinkingLevelMap(true, { ...allLevels, minimal: null });
+    expect(explicitNullMap).toEqual({ ...allLevels, minimal: null });
+    expect(supportedThinkingLevels(explicitNullMap)).toEqual(supported);
+
+    const nonReasoningMap = { minimal: "minimal", high: "high" };
+    expect(normalizeThinkingLevelMap(false, nonReasoningMap)).toEqual(nonReasoningMap);
+
+    const source = model("m", { thinkingLevelMap: allLevels });
+    const projected = virtualModelNode(chain(), { providers: { a: provider("a", source) } });
+    expect(projected?.thinkingLevelMap).toEqual({ ...allLevels, minimal: null });
+    expect(supportedThinkingLevels(projected?.thinkingLevelMap)).toEqual(supported);
+  });
+
+  it("normalizes persisted minimal reasoning effort to low", () => {
+    const resolved = resolveTargetSettings(
+      { provider: "a", modelId: "m", reasoningEffort: "minimal" } as unknown as Target,
+      settings,
+    );
+    expect(resolved.reasoningEffort).toBe("low");
   });
 
   it("moves a target by one position and clones an out-of-range result", () => {
@@ -171,6 +242,56 @@ describe("chains", () => {
     ]);
   });
 
+  it("sorts targets stably by multiplier in both directions without mutating input", () => {
+    const input: Target[] = [
+      { provider: "high", modelId: "m" },
+      { provider: "low-first", modelId: "m" },
+      { provider: "missing", modelId: "m" },
+      { provider: "low-second", modelId: "m" },
+    ];
+    const models: ModelsJson = {
+      providers: {
+        high: {
+          ...provider("high", model("m")),
+          piModelFailover: { group: null, costMultiplier: 2 },
+        },
+        "low-first": {
+          ...provider("low-first", model("m")),
+          piModelFailover: { group: null, costMultiplier: 0.5 },
+        },
+        missing: provider("missing", model("m")),
+        "low-second": {
+          ...provider("low-second", model("m")),
+          piModelFailover: { group: null, costMultiplier: 0.5 },
+        },
+      },
+    };
+
+    const ascending = sortTargetsByCostMultiplier(input, models, "asc");
+    const descending = sortTargetsByCostMultiplier(input, models, "desc");
+
+    expect(ascending.map(({ provider: id }) => id)).toEqual([
+      "low-first",
+      "low-second",
+      "missing",
+      "high",
+    ]);
+    expect(descending.map(({ provider: id }) => id)).toEqual([
+      "high",
+      "missing",
+      "low-first",
+      "low-second",
+    ]);
+    expect(ascending).not.toBe(input);
+    expect(ascending[0]).not.toBe(input[1]);
+    expect(input.map(({ provider: id }) => id)).toEqual([
+      "high",
+      "low-first",
+      "missing",
+      "low-second",
+    ]);
+  });
+
   it("projects the first target and returns null for empty or missing targets", () => {
     const source = model("m", {
       reasoning: false,
@@ -234,5 +355,35 @@ describe("chains", () => {
     });
     expect(inherited.modelParameters).not.toBe(settings.modelParameters);
     expect(inherited.modelParameters.nested).not.toBe(settings.modelParameters.nested);
+  });
+
+  it("rewrites only the renamed provider reference and preserves target settings", () => {
+    const input: Chain[] = [
+      chain([
+        { provider: "relay", modelId: "m", maxRetries: 2 },
+        { provider: "keep", modelId: "m" },
+      ]),
+      { ...chain([{ provider: "relay", modelId: "n" }]), id: "review" },
+    ];
+    const before = structuredClone(input);
+
+    const next = renameProviderRefs(input, "relay", "renamed");
+
+    expect(next[0]?.targets).toEqual([
+      { provider: "renamed", modelId: "m", maxRetries: 2 },
+      { provider: "keep", modelId: "m" },
+    ]);
+    expect(next[1]?.targets).toEqual([{ provider: "renamed", modelId: "n" }]);
+    expect(input).toEqual(before);
+  });
+
+  it("returns an unlinked clone when the provider id is unchanged", () => {
+    const input: Chain[] = [chain()];
+
+    const next = renameProviderRefs(input, "relay", "relay");
+
+    expect(next).toEqual(input);
+    expect(next).not.toBe(input);
+    expect(next[0]).not.toBe(input[0]);
   });
 });

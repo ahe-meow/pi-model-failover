@@ -14,7 +14,7 @@ import { type PiRegistrar, Registrar } from "./adapters/registrar.js";
 import { ConfigStore } from "./config/configStore.js";
 import { SharedState } from "./config/sharedState.js";
 import { WriteQueue } from "./config/writeQueue.js";
-import { dropProvider } from "./domain/chains.js";
+import { dropProvider, renameProviderRefs } from "./domain/chains.js";
 import { reset } from "./domain/cooldown.js";
 import type {
   Chain,
@@ -24,6 +24,7 @@ import type {
   ProviderNode,
   TargetRef,
 } from "./domain/types.js";
+import { normalizeThinkingLevelMap } from "./domain/types.js";
 import { HistoryLog } from "./history/historyLog.js";
 import { S } from "./strings.js";
 import { type AppDeps, createApp } from "./tui/app.js";
@@ -41,19 +42,22 @@ export function toPiProviderConfig(value: unknown): ProviderConfig {
   if (typeof value !== "object" || value === null) return {};
   if (hasStreamSimple(value)) return value;
   const provider = value as ProviderNode;
-  const models = provider.models.map((model: ModelNode) => ({
-    id: model.id,
-    name: model.name ?? model.id,
-    ...(model.api === undefined ? {} : { api: model.api }),
-    ...(model.baseUrl === undefined ? {} : { baseUrl: model.baseUrl }),
-    reasoning: model.reasoning,
-    ...(model.thinkingLevelMap === undefined ? {} : { thinkingLevelMap: model.thinkingLevelMap }),
-    input: model.input,
-    cost: model.cost,
-    contextWindow: model.contextWindow,
-    maxTokens: model.maxTokens,
-    ...(model.headers === undefined ? {} : { headers: model.headers }),
-  }));
+  const models = provider.models.map((model: ModelNode) => {
+    const thinkingLevelMap = normalizeThinkingLevelMap(model.reasoning, model.thinkingLevelMap);
+    return {
+      id: model.id,
+      name: model.name ?? model.id,
+      ...(model.api === undefined ? {} : { api: model.api }),
+      ...(model.baseUrl === undefined ? {} : { baseUrl: model.baseUrl }),
+      reasoning: model.reasoning,
+      ...(thinkingLevelMap === undefined ? {} : { thinkingLevelMap }),
+      input: model.input,
+      cost: model.cost,
+      contextWindow: model.contextWindow,
+      maxTokens: model.maxTokens,
+      ...(model.headers === undefined ? {} : { headers: model.headers }),
+    };
+  });
   return {
     name: provider.name,
     ...(provider.baseUrl === undefined ? {} : { baseUrl: provider.baseUrl }),
@@ -77,7 +81,8 @@ export type {
   KeyGroup,
   ModelNode,
   ModelsJson,
-  ProviderNode,
+  ReasoningEffort,
+  ReasoningLevel,
   Settings,
   Target,
   TargetRef,
@@ -143,10 +148,10 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   const history = await HistoryLog.open(nodeFs, queue, dir);
   const modelsFile = new ModelsJsonFile(nodeFs, queue, join(getAgentDir(), "models.json"));
   let currentRegistry: ModelRegistryLike | undefined;
-  type ThinkingLevel = Exclude<NonNullable<ExtensionContext["thinkingLevel"]>, "off">;
+  type ThinkingLevel = NonNullable<ExtensionContext["thinkingLevel"]>;
   let thinkingLevel: ThinkingLevel = "medium";
   const setThinkingLevel = (level: ExtensionContext["thinkingLevel"]): void => {
-    if (level !== undefined) thinkingLevel = level === "off" ? "minimal" : level;
+    if (level !== undefined) thinkingLevel = level;
   };
   const sessionId = crypto.randomUUID();
   const piRegistrar: PiRegistrar = {
@@ -172,6 +177,15 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   let models = await modelsFile.read();
   registrar.syncOwned(models);
   registrar.syncFailover(config.get().chains, models);
+  const modelManagerModelsFile: AppDeps["modelsFile"] = {
+    read: () => modelsFile.read(),
+    update: async (update) => {
+      const next = await modelsFile.update(update);
+      models = structuredClone(next);
+      registrar.syncFailover(config.get().chains, next);
+      return next;
+    },
+  };
 
   const refresh = async (_event: SessionStartEvent, ctx: ExtensionContext): Promise<void> => {
     currentRegistry = ctx.modelRegistry;
@@ -207,7 +221,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
       await ctx.ui.custom((_tui, _theme, _keybindings, done) => {
         const appDeps: AppDeps = {
           config,
-          modelsFile,
+          modelsFile: modelManagerModelsFile,
           initialModels: models,
           models: () => models,
           state,
@@ -225,9 +239,24 @@ export default async function (pi: ExtensionAPI): Promise<void> {
             config.get().chains.reduce((count, chain) => count + chain.targets.length, 0),
           resetAll,
           afterProviderDelete: async (providerId, nextModels) => {
-            models = structuredClone(nextModels);
             await config.update((value) => {
               value.chains = dropProvider(value.chains, providerId);
+            });
+            registrar.syncOwned(nextModels);
+            registrar.syncFailover(config.get().chains, nextModels);
+          },
+          afterProviderRename: async (previousId, providerId, nextModels) => {
+            await config.update((value) => {
+              value.chains = renameProviderRefs(value.chains, previousId, providerId);
+            });
+            await state.update((targets) => {
+              for (const [key, current] of Object.entries(targets)) {
+                const slash = key.indexOf("/");
+                if (slash < 1 || key.slice(0, slash) !== previousId) continue;
+                const renamed = `${providerId}${key.slice(slash)}` as TargetRef;
+                if (targets[renamed] === undefined) targets[renamed] = current;
+                delete targets[key as TargetRef];
+              }
             });
             registrar.syncOwned(nextModels);
             registrar.syncFailover(config.get().chains, nextModels);

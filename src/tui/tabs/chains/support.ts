@@ -75,13 +75,18 @@ export function createChainForm(
   submit: (values: Record<string, unknown>) => void,
   cancel: () => void,
 ): Form {
-  const fields: Field[] =
-    mode === "new"
-      ? [
-          textField("id", S.chains.form.labels.id, createChainId()),
-          textField("name", S.chains.form.labels.name, String()),
-        ]
-      : [textField("name", S.chains.form.labels.name, current?.name ?? String())];
+  const fields: Field[] = [
+    textField(
+      "id",
+      S.chains.form.labels.id,
+      mode === "new" ? createChainId() : (current?.id ?? String()),
+    ),
+    textField(
+      "name",
+      S.chains.form.labels.name,
+      mode === "new" ? String() : (current?.name ?? String()),
+    ),
+  ];
   return new Form(fields, submit, cancel);
 }
 

@@ -115,17 +115,112 @@ describe("Form", () => {
 
     expect(f.render(24).join("\n")).toContain("▌");
   });
-  it("commits and submits after editing the last field", () => {
+  it("submits current values with Ctrl+S", () => {
+    const submit = vi.fn();
+    const f = new Form(
+      [
+        { kind: "text", key: "name", label: "Name", value: "old" },
+        { kind: "number", key: "n", label: "N", value: 3 },
+      ],
+      submit,
+      vi.fn(),
+    );
+
+    f.handleInput(Key.down);
+    f.handleInput("4");
+    f.handleInput(Key.ctrl("s"));
+
+    expect(f.values()).toEqual({ name: "old", n: 34 });
+    expect(submit).toHaveBeenCalledWith({ name: "old", n: 34 });
+  });
+
+  it("does not submit when Enter commits direct input on the final field", () => {
     const submit = vi.fn();
     const cancel = vi.fn();
     const f = new Form([{ kind: "number", key: "n", label: "N", value: 3 }], submit, cancel);
 
-    f.handleInput(Key.enter);
-    expect(submit).not.toHaveBeenCalled();
+    f.handleInput("4");
     f.handleInput(Key.enter);
 
-    expect(submit).toHaveBeenCalledWith({ n: 3 });
+    expect(f.values().n).toBe(34);
+    expect(submit).not.toHaveBeenCalled();
     f.handleInput(Key.escape);
     expect(cancel).toHaveBeenCalled();
+  });
+
+  it("commits an active final-field draft without submitting", () => {
+    const submit = vi.fn();
+    const f = new Form([{ kind: "number", key: "n", label: "N", value: 3 }], submit, vi.fn());
+
+    f.handleInput(Key.enter);
+    f.handleInput("4");
+    f.handleInput(Key.enter);
+
+    expect(f.values().n).toBe(34);
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("commits an active draft before Ctrl+S submits", () => {
+    const submit = vi.fn();
+    const f = new Form([{ kind: "number", key: "n", label: "N", value: 3 }], submit, vi.fn());
+
+    f.handleInput(Key.enter);
+    f.handleInput("4");
+    f.handleInput(Key.ctrl("s"));
+
+    expect(f.values().n).toBe(34);
+    expect(submit).toHaveBeenCalledWith({ n: 34 });
+  });
+
+  it("inserts a newline in a multiline field before Ctrl+S submits", () => {
+    const submit = vi.fn();
+    const f = new Form(
+      [{ kind: "text", key: "headers", label: "Headers", value: "first", multiline: true }],
+      submit,
+      vi.fn(),
+    );
+
+    f.handleInput("\n");
+    f.handleInput("second");
+    expect(f.values().headers).toBe("first\nsecond");
+    expect(submit).not.toHaveBeenCalled();
+
+    f.handleInput(Key.ctrl("s"));
+
+    expect(submit).toHaveBeenCalledWith({ headers: "first\nsecond" });
+  });
+
+  it("cancels the whole form when a direct edit is left with Esc", () => {
+    const cancel = vi.fn();
+    const f = new Form(
+      [{ kind: "text", key: "multiplier", label: "Multiplier", value: "0.1" }],
+      vi.fn(),
+      cancel,
+      { exitOnEscape: true },
+    );
+
+    f.handleInput(Key.enter);
+    expect(f.isEditing()).toBe(true);
+    f.handleInput("9");
+    f.handleInput(Key.escape);
+
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(f.isEditing()).toBe(false);
+    expect(f.values().multiplier).toBe("0.1");
+  });
+
+  it("keeps the form open when Esc leaves an editor without exitOnEscape", () => {
+    const cancel = vi.fn();
+    const f = new Form(
+      [{ kind: "text", key: "name", label: "Name", value: "old" }],
+      vi.fn(),
+      cancel,
+    );
+
+    f.handleInput(Key.enter);
+    f.handleInput(Key.escape);
+
+    expect(cancel).not.toHaveBeenCalled();
+    expect(f.isEditing()).toBe(false);
   });
 });

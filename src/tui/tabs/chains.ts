@@ -1,5 +1,5 @@
 import { Key, truncateToWidth } from "@earendil-works/pi-tui";
-import { moveTarget, removeChain, removeTarget, upsertChain } from "../../domain/chains.js";
+import * as ops from "../../domain/chains.js";
 import { reset } from "../../domain/cooldown.js";
 import type { Chain, ModelsJson, Target, TargetRef, TargetState } from "../../domain/types.js";
 import { S } from "../../strings.js";
@@ -10,7 +10,7 @@ import { tableColumns } from "../primitives/table.js";
 import { activeTextFilter, draft, TextFilter } from "../primitives/textFilter.js";
 import { theme } from "../primitives/theme.js";
 import { ImportPreview } from "./chains/importPreview.js";
-import { chainDetailHeader, filteredChainRows, filteredTargetRows } from "./chains/rows.js";
+import * as rows from "./chains/rows.js";
 import { createChainForm, fitBody, isKey, manualEvent, move, targetRef } from "./chains/support.js";
 import { TargetForm } from "./chains/targetForm.js";
 import { type ChainsDeps, emptyChainsDeps } from "./chains/types.js";
@@ -20,6 +20,10 @@ export type { ChainsDeps } from "./chains/types.js";
 
 type Screen = "list" | "detail" | "form";
 type FormMode = "new" | "rename";
+const renderPanel = (title: string, body: string[], width: number, listRows: number): string[] => [
+  theme.title(truncateToWidth(title, width)),
+  ...fitBody(body, width, listRows),
+];
 export class ChainsTab implements TabComponent {
   private readonly chainList = new ScrollList({
     listRows: 7,
@@ -27,7 +31,7 @@ export class ChainsTab implements TabComponent {
   });
   private readonly targetList = new ScrollList({
     listRows: 7,
-    columns: tableColumns(S.chains.targetHeader),
+    columns: rows.targetColumns(),
   });
   private states: Record<TargetRef, TargetState> = {};
   private screen: Screen = "list";
@@ -41,6 +45,7 @@ export class ChainsTab implements TabComponent {
   private readonly targetFilter = new TextFilter();
   private visibleChains: Chain[] = [];
   private visibleTargetIndices: number[] = [];
+  private sortDescending = false;
   constructor(private readonly deps: ChainsDeps = emptyChainsDeps()) {
     this.setChainRows();
     void this.refreshState().catch(() => {});
@@ -51,25 +56,14 @@ export class ChainsTab implements TabComponent {
     const filter = this.activeFilter();
     if (filter?.isEditing) return draft(width, filter, listRows, this.screen === "detail");
     if (this.subScreen !== undefined) return this.subScreen.render(width, listRows);
-    if (this.confirm !== undefined) {
-      return [
-        theme.title(truncateToWidth(S.chains.listHeader, width)),
-        ...fitBody(this.confirm.render(width), width, listRows),
-      ];
-    }
-    if (this.form !== undefined) {
-      return [
-        theme.title(truncateToWidth(this.formTitle, width)),
-        ...fitBody(this.form.render(width), width, listRows),
-      ];
-    }
+    if (this.confirm !== undefined)
+      return renderPanel(S.chains.listHeader, this.confirm.render(width), width, listRows);
+    if (this.form !== undefined)
+      return renderPanel(this.formTitle, this.form.render(width), width, listRows);
     return this.screen === "detail" ? this.renderDetail(width, listRows) : this.renderList(width);
   }
   async handleInput(data: string): Promise<void> {
-    if (this.subScreen !== undefined) {
-      await this.subScreen.handleInput(data);
-      return;
-    }
+    if (this.subScreen !== undefined) return this.subScreen.handleInput(data);
     if (this.confirm !== undefined) {
       this.confirm.handleInput(data);
       await this.waitForPending();
@@ -85,10 +79,7 @@ export class ChainsTab implements TabComponent {
       if (filter.handleInput(data) === "applied") this.refreshFilteredRows();
       return;
     }
-    if (this.screen === "detail") {
-      await this.handleDetailInput(data);
-      return;
-    }
+    if (this.screen === "detail") return this.handleDetailInput(data);
     if (isKey(data, Key.slash)) this.chainFilter.open();
     else if (isKey(data, Key.escape) && this.chainFilter.clear()) this.refreshFilteredRows();
     else if (data === "a") {
@@ -128,7 +119,7 @@ export class ChainsTab implements TabComponent {
     this.targetList.setListRows(Math.max(0, listRows - 1));
     this.setTargetRows(chain, models);
     return [
-      theme.title(truncateToWidth(chainDetailHeader(chain, models), width)),
+      theme.title(truncateToWidth(rows.chainDetailHeader(chain, models), width)),
       this.targetList.header(width),
       ...this.targetList.render(width),
     ];
@@ -149,9 +140,10 @@ export class ChainsTab implements TabComponent {
     else if (data === "i") this.openTargetPicker(false);
     else if (data === "d") this.openRemoveTarget();
     else if (data === "r") this.openResetTarget();
-    else if (data === "J") await this.moveSelectedTarget(1);
+    else if (data === "s") await this.sortTargets();
+    else if (data.toLowerCase() === "j") await this.moveSelectedTarget(1);
     else if (isKey(data, Key.shift("j"))) await this.moveSelectedTarget(1);
-    else if (data === "K") await this.moveSelectedTarget(-1);
+    else if (data.toLowerCase() === "k") await this.moveSelectedTarget(-1);
     else if (isKey(data, Key.shift("k"))) await this.moveSelectedTarget(-1);
     else move(this.targetList, data);
   }
@@ -159,15 +151,13 @@ export class ChainsTab implements TabComponent {
     return activeTextFilter(this.screen, this.chainFilter, this.targetFilter);
   }
   private refreshFilteredRows(): void {
+    const chain = this.currentChain();
     if (this.screen === "list") this.setChainRows();
-    else if (this.screen === "detail") {
-      const chain = this.currentChain();
-      if (chain !== undefined) this.setTargetRows(chain, this.deps.models());
-    }
+    else if (chain !== undefined) this.setTargetRows(chain, this.deps.models());
   }
   private setChainRows(): void {
     const chains = this.deps.config.get().chains;
-    const result = filteredChainRows(
+    const result = rows.filteredChainRows(
       chains,
       this.states,
       Date.parse(this.deps.now()) || 0,
@@ -177,10 +167,9 @@ export class ChainsTab implements TabComponent {
     this.visibleChains = result.chains;
   }
   private setTargetRows(chain: Chain, models: ModelsJson): void {
-    const result = filteredTargetRows(
+    const result = rows.filteredTargetRows(
       chain,
       models,
-      this.deps.config.get().settings,
       this.states,
       Date.parse(this.deps.now()) || 0,
       this.targetFilter.query,
@@ -189,17 +178,14 @@ export class ChainsTab implements TabComponent {
     this.targetList.setRows(result.rows);
   }
   private currentChain(): Chain | undefined {
-    return this.selectedChainId === undefined
-      ? undefined
-      : this.deps.config.get().chains.find((chain) => chain.id === this.selectedChainId);
+    return this.deps.config.get().chains.find((chain) => chain.id === this.selectedChainId);
   }
-  private selectedListChain(): Chain | undefined {
-    return this.visibleChains[this.chainList.selected];
-  }
+  private selectedListChain = (): Chain | undefined => this.visibleChains[this.chainList.selected];
   private openSelectedChain(): void {
     const chain = this.selectedListChain();
     if (chain === undefined) return;
     this.selectedChainId = chain.id;
+    this.sortDescending = false;
     this.targetList.selected = 0;
     this.targetFilter.reset();
     this.visibleTargetIndices = chain.targets.map((_, index) => index);
@@ -209,12 +195,7 @@ export class ChainsTab implements TabComponent {
   private openTargetForm(): void {
     const chain = this.currentChain();
     const targetIndex = this.visibleTargetIndices[this.targetList.selected];
-    if (
-      chain === undefined ||
-      targetIndex === undefined ||
-      chain.targets[targetIndex] === undefined
-    )
-      return;
+    if (!chain || targetIndex === undefined || !chain.targets[targetIndex]) return;
     this.subScreen = new TargetForm({
       ...this.deps,
       chainId: chain.id,
@@ -250,7 +231,7 @@ export class ChainsTab implements TabComponent {
       [S.chains.actions.removeTargetDetails],
       async () => {
         await this.updateChains((chains) =>
-          chains.map((entry) => (entry.id === chain.id ? removeTarget(entry, ref) : entry)),
+          chains.map((entry) => (entry.id === chain.id ? ops.removeTarget(entry, ref) : entry)),
         );
         this.targetList.selected = Math.min(position, Math.max(0, chain.targets.length - 2));
       },
@@ -274,13 +255,15 @@ export class ChainsTab implements TabComponent {
 
   private async saveChain(mode: FormMode, values: Record<string, unknown>): Promise<void> {
     const current = mode === "rename" ? this.selectedListChain() : undefined;
-    const id = mode === "new" ? String(values.id ?? String()).trim() : current?.id;
+    const id = String(values.id ?? String()).trim();
     const name = String(values.name ?? "").trim();
-    if (id === undefined || !/^[a-z0-9][a-z0-9-]{0,31}$/.test(id)) {
+    if (!/^[a-z0-9][a-z0-9-]{0,31}$/.test(id)) {
       this.deps.notify(S.chains.form.invalidId);
       return;
     }
-    if (mode === "new" && this.deps.config.get().chains.some((chain) => chain.id === id)) {
+    if (
+      this.deps.config.get().chains.some((chain) => chain.id === id && chain.id !== current?.id)
+    ) {
       this.deps.notify(S.chains.form.duplicateId);
       return;
     }
@@ -288,24 +271,27 @@ export class ChainsTab implements TabComponent {
       this.deps.notify(S.chains.form.invalidName);
       return;
     }
-    const targets = mode === "new" ? [] : current?.targets;
-    if (targets === undefined) return;
     await this.updateChains((chains) =>
-      upsertChain(chains, { id, name, targets: structuredClone(targets) }),
+      mode === "rename" && current !== undefined
+        ? ops.renameChain(chains, current.id, id, name)
+        : ops.upsertChain(chains, { id, name, targets: [] }),
     );
+    if (this.selectedChainId === current?.id) this.selectedChainId = id;
     this.closeForm("list");
-    const index = this.deps.config.get().chains.findIndex((chain) => chain.id === id);
-    if (index >= 0) this.chainList.selected = index;
+    this.setChainRows();
+    this.chainList.selected = Math.max(
+      0,
+      this.visibleChains.findIndex((chain) => chain.id === id),
+    );
   }
   private openDelete(): void {
     const chain = this.selectedListChain();
     if (chain === undefined) return;
     this.ask(S.chains.actions.deleteTitle(chain.id), [S.chains.actions.deleteDetails], async () => {
-      await this.updateChains((chains) => removeChain(chains, chain.id));
+      await this.updateChains((chains) => ops.removeChain(chains, chain.id));
       this.selectedChainId = undefined;
     });
   }
-
   private openResetChain(): void {
     const chain = this.screen === "detail" ? this.currentChain() : this.selectedListChain();
     if (chain === undefined) return;
@@ -316,13 +302,11 @@ export class ChainsTab implements TabComponent {
       () => this.resetTargets(targets),
     );
   }
-
   private openResetTarget(): void {
     const target =
       this.currentChain()?.targets[this.visibleTargetIndices[this.targetList.selected] ?? -1];
     if (target !== undefined) this.start(() => this.resetTargets([target]));
   }
-
   private async resetTargets(targets: Target[]): Promise<void> {
     const timestamp = this.deps.now();
     const refs = targets.map(targetRef);
@@ -333,7 +317,28 @@ export class ChainsTab implements TabComponent {
       await this.deps.history.append(manualEvent(ref, timestamp, this.deps.sessionId));
     await this.refreshState();
   }
-
+  private async sortTargets(): Promise<void> {
+    const chain = this.currentChain();
+    if (chain === undefined || chain.targets.length < 2) return;
+    const index = this.visibleTargetIndices[this.targetList.selected];
+    const selectedTarget = index === undefined ? undefined : chain.targets[index];
+    const selectedRef = selectedTarget === undefined ? undefined : targetRef(selectedTarget);
+    const models = this.deps.models();
+    const direction = this.sortDescending ? "desc" : "asc";
+    await this.updateChains((chains) =>
+      chains.map((entry) =>
+        entry.id === chain.id
+          ? { ...entry, targets: ops.sortTargetsByCostMultiplier(entry.targets, models, direction) }
+          : entry,
+      ),
+    );
+    this.sortDescending = !this.sortDescending;
+    const updated = this.currentChain();
+    if (updated === undefined) return;
+    this.setTargetRows(updated, models);
+    const targetIndex = updated.targets.findIndex((target) => targetRef(target) === selectedRef);
+    this.targetList.selected = Math.max(0, this.visibleTargetIndices.indexOf(targetIndex));
+  }
   private async moveSelectedTarget(delta: -1 | 1): Promise<void> {
     const chain = this.currentChain();
     const position = this.targetList.selected;
@@ -341,7 +346,7 @@ export class ChainsTab implements TabComponent {
     if (chain === undefined || index === undefined) return;
     if (index + delta < 0 || index + delta >= chain.targets.length) return;
     await this.updateChains((chains) =>
-      chains.map((entry) => (entry.id === chain.id ? moveTarget(entry, index, delta) : entry)),
+      chains.map((entry) => (entry.id === chain.id ? ops.moveTarget(entry, index, delta) : entry)),
     );
     const updated = this.currentChain();
     if (updated !== undefined) {
@@ -355,13 +360,9 @@ export class ChainsTab implements TabComponent {
   }
 
   private async updateChains(transform: (chains: Chain[]) => Chain[]): Promise<void> {
-    await this.deps.config.update((config) => {
-      config.chains = transform(config.chains);
-    });
-    this.deps.registrar.syncFailover(
-      structuredClone(this.deps.config.get().chains),
-      this.deps.models(),
-    );
+    await this.deps.config.update((config) => (config.chains = transform(config.chains)));
+    const chains = structuredClone(this.deps.config.get().chains);
+    this.deps.registrar.syncFailover(chains, this.deps.models());
   }
 
   private ask(title: string, details: string[], action: () => Promise<void>): void {
@@ -380,7 +381,6 @@ export class ChainsTab implements TabComponent {
   private start(task: () => Promise<void>): void {
     this.pending = task().catch(() => this.deps.notify(S.chains.form.saveFailed));
   }
-
   private async refreshState(): Promise<void> {
     this.states = await this.deps.state.read();
   }
@@ -393,8 +393,7 @@ export class ChainsTab implements TabComponent {
 
   private async waitForPending(): Promise<void> {
     const operation = this.pending;
-    if (operation === undefined) return;
-    await operation;
+    if (operation !== undefined) await operation;
     if (this.pending === operation) this.pending = undefined;
   }
 }

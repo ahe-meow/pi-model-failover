@@ -11,19 +11,22 @@ export type ErrorHandlingMode = "smart" | "switch" | "retry";
 export type TtftAction = "cooldown-only" | "abort";
 export type FailureClass = "cooldown" | "persistent" | "compat-retry";
 export type FailoverReason = `http-${number}` | "network" | "ttft-timeout" | "no-progress" | "persistent" | "manual";
+export type ReasoningLevel = "off" | "low" | "medium" | "high" | "xhigh" | "max";
+export type ReasoningEffort = "inherit" | ReasoningLevel;
 
 export interface CatalogModel { id: string; name?: string; reasoning: boolean; vision: boolean; contextWindow: number; maxTokens: number; defaults: Record<string, unknown>; }
-export interface TargetSettings { errorHandlingMode: ErrorHandlingMode; maxRetries: number; reasoningEffort: "inherit" | "minimal" | "low" | "medium" | "high"; modelParameters: Record<string, unknown>; noProgressTimeoutSeconds: number; ttftTimeoutSeconds: number; ttftAction: TtftAction; }
+export interface TargetSettings { errorHandlingMode: ErrorHandlingMode; maxRetries: number; reasoningEffort: ReasoningEffort; modelParameters: Record<string, unknown>; noProgressTimeoutSeconds: number; ttftTimeoutSeconds: number; ttftAction: TtftAction; }
 export interface Target extends Partial<TargetSettings> { provider: string; modelId: string; }
 export interface Chain { id: string; name: string; targets: Target[]; }
 export interface KeyGroup { id: string; prefix: string; template: { baseUrl: string; api: ApiType; headers: Record<string, string> }; createdAt: string; }
 export interface Settings extends TargetSettings { listRows: number; }   // reasoningEffort/modelParameters unused at global level
 export interface TargetState { consecutiveFailures: number; cooldownLevel: number; cooldownUntil: string | null; manualRecovery: boolean; lastFailure: { ts: string; reason: FailoverReason } | null; }
-export interface FailoverEvent { ts: string; sessionId: string; requestSeq: number; from: TargetRef; to: TargetRef | null; reason: FailoverReason; elapsedMs: number; }
+export interface FailoverErrorDetails { status?: number; code?: string; body?: string; }  // body is stored already redacted
+export interface FailoverEvent { ts: string; sessionId: string; requestSeq: number; from: TargetRef; to: TargetRef | null; reason: FailoverReason; elapsedMs: number; error?: FailoverErrorDetails; }
 
 // models.json shapes (Pi's), unknown fields preserved via index signature
-export interface ModelNode { id: string; name?: string; api?: ApiType; baseUrl?: string; reasoning: boolean; thinkingLevelMap?: Record<string, string>; input: ("text" | "image")[]; contextWindow: number; maxTokens: number; cost: { input: number; output: number; cacheRead: number; cacheWrite: number }; headers?: Record<string, string>; compat?: Record<string, unknown>; [k: string]: unknown; }
-export interface ProviderNode { name: string; baseUrl: string; api: ApiType; apiKey?: string; authHeader?: string; headers?: Record<string, string>; compat?: Record<string, unknown>; modelOverrides?: Record<string, unknown>; models: ModelNode[]; piModelFailover?: { group: string | null; costMultiplier: number }; piModelManager?: { managed: boolean }; [k: string]: unknown; }
+export interface ModelNode { id: string; name?: string; api?: ApiType; baseUrl?: string; reasoning: boolean; thinkingLevelMap?: Record<string, string | null>; input: ("text" | "image")[]; contextWindow: number; maxTokens: number; cost: { input: number; output: number; cacheRead: number; cacheWrite: number }; headers?: Record<string, string>; compat?: Record<string, unknown>; [k: string]: unknown; } // null marks a level unsupported by Pi
+export interface ProviderNode { name: string; baseUrl: string; api: ApiType; apiKey?: string; authHeader?: boolean; headers?: Record<string, string>; compat?: Record<string, unknown>; modelOverrides?: Record<string, unknown>; models: ModelNode[]; piModelFailover?: { group: string | null; costMultiplier: number }; piModelManager?: { managed: boolean }; [k: string]: unknown; }
 export type ModelsJson = { providers: Record<string, ProviderNode>; [k: string]: unknown };
 ```
 
@@ -118,6 +121,7 @@ Tests assert: every integer in `1..VERSION-1` has an entry (vacuously true in v1
 ```ts
 export function redactSecret(value: string): string;  // "sk-…abcd"; <8 chars → "…"; "$ENV"/"${ENV}" refs returned unchanged
 export function redactProvider(p: ProviderNode): ProviderNode;  // copy with apiKey and header values matching /key|token|auth/i redacted
+export function redactFailureBody(body: string): string;  // redacts api-key/token/bearer values in a provider response body, leaves ordinary text unchanged
 ```
 
 Tests assert: exact outputs for 4-, 8-, 40-char inputs; env refs untouched; header `Authorization` redacted, `X-Team` kept (C22).
@@ -145,6 +149,7 @@ Responsibility: pure edits to `ModelsJson` providers.
 export function listProviders(m: ModelsJson): Array<{ id: string; node: ProviderNode; owned: boolean; multiplier: number | null }>;
 export function upsertProvider(m: ModelsJson, id: string, node: ProviderNode): ModelsJson;
 export function renameProvider(m: ModelsJson, id: string, name: string): ModelsJson;
+export function renameProviderId(m: ModelsJson, oldId: string, newId: string): ModelsJson;  // moves the providers key in place, preserving node data and key order; unchanged clone when the id is the same, the source is missing, or the destination is taken
 export function deleteProvider(m: ModelsJson, id: string): ModelsJson; // P1 data-half operation; changes only ModelsJson.providers
 export function addModelToProviders(m: ModelsJson, ids: string[], node: ModelNode): ModelsJson;   // skip if modelId exists
 export function removeModel(m: ModelsJson, providerId: string, modelId: string): ModelsJson;
@@ -201,6 +206,7 @@ export function addTargets(c: Chain, refs: TargetRef[]): Chain;              // 
 export function removeTarget(c: Chain, ref: TargetRef): Chain;
 export function chainsReferencing(chains: Chain[], providerId: string): Chain[];
 export function dropProvider(chains: Chain[], providerId: string): Chain[]; // P2 chain-side cleanup for chain-aware provider deletion
+export function renameProviderRefs(chains: Chain[], oldId: string, newId: string): Chain[];  // rewrites targets[*].provider only; other Target fields, order, and Chain data are preserved
 export function sameModelImport(c: Chain, m: ModelsJson, modelId: string): Chain;   // uses providersWithModel
 export function virtualModelNode(c: Chain, m: ModelsJson): ModelNode | null;      // from first target; null if empty or target missing
 export function resolveTargetSettings(t: Target, s: Settings): TargetSettings;

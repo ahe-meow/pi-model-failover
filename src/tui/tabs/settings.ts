@@ -244,12 +244,8 @@ export class SettingsTab implements TabComponent {
       this.onReset = true;
       return;
     }
-    if (isKey(data, Key.enter)) {
-      this.form.handleInput(data);
-      await this.waitForSave();
-      return;
-    }
     this.form.handleInput(data);
+    if (isKey(data, Key.ctrl("s"))) await this.waitForSave();
   }
 
   private async waitForSave(): Promise<void> {

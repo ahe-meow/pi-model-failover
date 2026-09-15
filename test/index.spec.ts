@@ -168,6 +168,17 @@ describe("extension entry", () => {
     expect(toPiProviderConfig(config)).toBe(config);
   });
 
+  it("adds default six-level reasoning capability metadata at the Pi boundary", () => {
+    expect(
+      toPiProviderConfig({
+        name: "relay",
+        models: [{ ...modelNode, reasoning: true }],
+      }),
+    ).toMatchObject({
+      models: [{ thinkingLevelMap: { xhigh: "xhigh", max: "max", minimal: null } }],
+    });
+  });
+
   it("preserves Pi boolean authHeader when adapting provider config", () => {
     expect(toPiProviderConfig({ name: "relay", authHeader: true, models: [] })).toMatchObject({
       authHeader: true,
@@ -212,6 +223,70 @@ describe("extension entry", () => {
     });
   });
 
+  it("propagates a Model Manager Provider Model update to Chains and failover runtime", async () => {
+    const pi = new FakePi();
+    const { factory, config, modelsFile } = await makeFactory({
+      pi,
+      models: { providers: { relay: ownedProvider("relay") } },
+      chains: [chainWithModel()],
+    });
+    await config.update((value) => {
+      value.catalog = [
+        {
+          id: "m",
+          reasoning: false,
+          vision: false,
+          contextWindow: 1000,
+          maxTokens: 100,
+          defaults: {},
+        },
+      ];
+    });
+    await factory(pi as never);
+
+    let app: { handleInput(data: string): void; render(width: number): string[] } | undefined;
+    const custom = vi.fn(
+      async (
+        makeComponent: (
+          tui: unknown,
+          theme: unknown,
+          keybindings: unknown,
+          done: (result: unknown) => void,
+        ) => unknown,
+      ) => {
+        app = makeComponent({}, {}, {}, () => {}) as {
+          handleInput(data: string): void;
+          render(width: number): string[];
+        };
+      },
+    );
+    await pi.commands.get("failover")?.("", {
+      mode: "tui",
+      modelRegistry: {},
+      thinkingLevel: "medium",
+      ui: { notify: vi.fn(), custom },
+    });
+    expect(app).toBeDefined();
+
+    app?.handleInput(Key.enter);
+    app?.handleInput("a");
+    app?.handleInput(Key.space);
+    app?.handleInput(Key.enter);
+
+    await vi.waitFor(async () => {
+      const saved = await modelsFile.read();
+      expect(saved.providers.relay?.models).toHaveLength(1);
+    });
+    await vi.waitFor(() => {
+      expect(pi.providers.get("failover")).toMatchObject({
+        models: [{ id: "coding", contextWindow: 1000 }],
+      });
+    });
+
+    app?.handleInput("2");
+    app?.handleInput(Key.enter);
+    expect(app?.render(120).join("\n")).toContain("ctx 1000");
+  });
   it("C23: reset-all writes one manual event per configured Target", async () => {
     const pi = new FakePi();
     const initialModels: ModelsJson = {
@@ -363,5 +438,115 @@ describe("extension entry", () => {
 
     expect(pi.providers.has("later")).toBe(true);
     expect(pi.providers.has("builtin")).toBe(false);
+  });
+
+  it("renames a provider id across models.json, Chains, and cooldown state", async () => {
+    const pi = new FakePi();
+    const { factory, modelsFile, agentDir } = await makeFactory({
+      pi,
+      models: { providers: { relay: ownedProvider("relay", [modelNode]) } },
+      chains: [chainWithModel()],
+    });
+    await factory(pi as never);
+    const statePath = join(agentDir, "pi-model-failover", "state.json");
+    await nodeFs.writeAtomic(
+      statePath,
+      JSON.stringify({
+        version: 1,
+        revision: 1,
+        targets: {
+          "relay/m": {
+            consecutiveFailures: 1,
+            cooldownLevel: 1,
+            cooldownUntil: null,
+            manualRecovery: true,
+            lastFailure: { ts: new Date(0).toISOString(), reason: "http-503" },
+          },
+          "renamed/m": {
+            consecutiveFailures: 9,
+            cooldownLevel: 4,
+            cooldownUntil: "2030-01-01T00:00:00.000Z",
+            manualRecovery: false,
+            lastFailure: { ts: new Date(0).toISOString(), reason: "http-429" },
+          },
+        },
+      }),
+      0o600,
+    );
+    const historyPath = join(agentDir, "pi-model-failover", "history.jsonl");
+    const historicalRow = JSON.stringify({
+      ts: new Date(0).toISOString(),
+      sessionId: "old-session",
+      requestSeq: 1,
+      from: "relay/m",
+      to: "other/m",
+      reason: "http-503",
+      elapsedMs: 5,
+    });
+    await nodeFs.writeAtomic(historyPath, `${historicalRow}\n`, 0o600);
+
+    let app: { handleInput(data: string): void; render(width: number): string[] } | undefined;
+    const custom = vi.fn(
+      async (
+        makeComponent: (
+          tui: unknown,
+          theme: unknown,
+          keybindings: unknown,
+          done: (result: unknown) => void,
+        ) => unknown,
+      ) => {
+        app = makeComponent({}, {}, {}, () => {}) as {
+          handleInput(data: string): void;
+          render(width: number): string[];
+        };
+      },
+    );
+    await pi.commands.get("failover")?.("", {
+      mode: "tui",
+      modelRegistry: {},
+      thinkingLevel: "medium",
+      ui: { notify: vi.fn(), custom },
+    });
+    expect(app).toBeDefined();
+
+    app?.handleInput(Key.enter);
+    app?.handleInput("e");
+    for (let index = 0; index < "relay".length; index++) app?.handleInput(Key.backspace);
+    for (const character of "renamed") app?.handleInput(character);
+    for (let index = 0; index < 7; index++) app?.handleInput(Key.down);
+    app?.handleInput(Key.ctrl("s"));
+
+    await vi.waitFor(async () => {
+      expect((await modelsFile.read()).providers.renamed).toBeDefined();
+    });
+    await vi.waitFor(async () => {
+      const raw = await nodeFs.readText(join(agentDir, "pi-model-failover", "config.json"));
+      const saved = JSON.parse(raw ?? "{}") as { chains: Chain[] };
+      expect(saved.chains[0]?.targets).toEqual([{ provider: "renamed", modelId: "m" }]);
+    });
+    await vi.waitFor(async () => {
+      const raw = await nodeFs.readText(statePath);
+      const saved = JSON.parse(raw ?? "{}") as { targets?: Record<string, unknown> };
+      expect(Object.keys(saved.targets ?? {})).toEqual(["renamed/m"]);
+      expect(saved.targets?.["relay/m"]).toBeUndefined();
+      expect(saved.targets).toEqual({
+        "renamed/m": {
+          consecutiveFailures: 9,
+          cooldownLevel: 4,
+          cooldownUntil: "2030-01-01T00:00:00.000Z",
+          manualRecovery: false,
+          lastFailure: { ts: new Date(0).toISOString(), reason: "http-429" },
+        },
+      });
+    });
+    await vi.waitFor(() => {
+      expect(pi.providers.has("relay")).toBe(false);
+      expect(pi.providers.has("renamed")).toBe(true);
+      expect(pi.providers.get("failover")).toMatchObject({
+        models: [{ id: "coding" }],
+      });
+    });
+    expect((await modelsFile.read()).providers.relay).toBeUndefined();
+    expect(await nodeFs.readText(historyPath)).toBe(`${historicalRow}\n`);
   });
 });

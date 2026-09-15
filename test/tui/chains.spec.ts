@@ -60,6 +60,16 @@ const models: ModelsJson = {
   },
 };
 
+const providerForSort = (id: string, multiplier?: number) => ({
+  name: id,
+  baseUrl: "https://relay.example/v1",
+  api: "openai-completions" as const,
+  models: models.providers.relay?.models.slice(0, 1) ?? [],
+  ...(multiplier === undefined
+    ? {}
+    : { piModelFailover: { group: null, costMultiplier: multiplier } }),
+});
+
 interface Harness {
   deps: TestChainsDeps;
   config: ConfigStore;
@@ -71,6 +81,7 @@ interface Harness {
 async function makeHarness(
   chains: Chain[] = [chain()],
   initialState: Record<TargetRef, TargetState> = {},
+  modelData: ModelsJson = models,
 ): Promise<Harness> {
   const config = await ConfigStore.open(new MemoryFs(), new WriteQueue(), "/d");
   await config.update((value) => {
@@ -89,7 +100,7 @@ async function makeHarness(
   const registrar = { syncFailover: vi.fn() };
   const deps: TestChainsDeps = {
     config,
-    models: () => models,
+    models: () => modelData,
     state,
     history,
     registrar,
@@ -265,7 +276,7 @@ describe("ChainsTab", () => {
     expect(deps.notify).not.toHaveBeenCalled();
     for (const character of "New Chain") await tab.handleInput(character);
     await tab.handleInput(Key.enter);
-    await tab.handleInput(Key.enter);
+    await tab.handleInput(Key.ctrl("s"));
 
     expect(config.get().chains).toMatchObject([
       { id: "new-chain", name: "New Chain", targets: [] },
@@ -273,16 +284,66 @@ describe("ChainsTab", () => {
     expect(registrar.syncFailover).toHaveBeenCalledTimes(1);
   });
 
-  it("renames the selected chain without changing its id", async () => {
-    const { deps, config } = await makeHarness([chain()]);
+  it("renames the selected chain ID and name in place, preserving targets and registration", async () => {
+    const { deps, config, registrar } = await makeHarness([
+      chain("coding", [target("relay"), target("backup")]),
+      chain("review"),
+    ]);
     const tab = createTab(deps);
 
-    tab.handleInput("r");
-    for (let index = 0; index < "Coding".length; index++) await tab.handleInput(Key.backspace);
+    await tab.handleInput("r");
+    for (const _character of "coding") await tab.handleInput(Key.backspace);
+    for (const character of "primary") await tab.handleInput(character);
+    await tab.handleInput(Key.down);
+    for (const _character of "Coding") await tab.handleInput(Key.backspace);
     for (const character of "Primary") await tab.handleInput(character);
-    await tab.handleInput(Key.enter);
+    await tab.handleInput(Key.ctrl("s"));
 
-    expect(config.get().chains[0]).toMatchObject({ id: "coding", name: "Primary" });
+    expect(config.get().chains.map(({ id }) => id)).toEqual(["primary", "review"]);
+    expect(config.get().chains[0]?.targets).toEqual([target("relay"), target("backup")]);
+    const synced = registrar.syncFailover.mock.calls.at(-1)?.[0] as Chain[] | undefined;
+    expect(synced?.map(({ id }) => id)).toEqual(["primary", "review"]);
+  });
+
+  it("restores the renamed Chain's visible selection after filtering", async () => {
+    const { deps, config } = await makeHarness([
+      chain("hidden"),
+      chain("match-a"),
+      chain("match-b"),
+    ]);
+    const tab = createTab(deps);
+
+    await tab.handleInput("/");
+    for (const character of "match") await tab.handleInput(character);
+    await tab.handleInput(Key.enter);
+    await tab.handleInput("r");
+    for (const _character of "match-a") await tab.handleInput(Key.backspace);
+    for (const character of "match-renamed") await tab.handleInput(character);
+    await tab.handleInput(Key.down);
+    for (const _character of "Match-a") await tab.handleInput(Key.backspace);
+    for (const character of "Renamed") await tab.handleInput(character);
+    await tab.handleInput(Key.ctrl("s"));
+
+    expect(config.get().chains.map(({ id }) => id)).toEqual(["hidden", "match-renamed", "match-b"]);
+    tab.render(78, 7);
+    await tab.handleInput(Key.enter);
+    expect(tab.render(78, 7).join("\n")).toContain("match-renamed → failover/match-renamed");
+  });
+
+  it("rejects a duplicate chain ID during rename", async () => {
+    const { deps, config, registrar } = await makeHarness([chain("coding"), chain("review")]);
+    const tab = createTab(deps);
+
+    await tab.handleInput("r");
+    for (const _character of "coding") await tab.handleInput(Key.backspace);
+    for (const character of "review") await tab.handleInput(character);
+    await tab.handleInput(Key.down);
+    await tab.handleInput(Key.enter);
+    await tab.handleInput(Key.ctrl("s"));
+
+    expect(deps.notify).toHaveBeenCalledWith(S.chains.form.duplicateId);
+    expect(config.get().chains.map(({ id }) => id)).toEqual(["coding", "review"]);
+    expect(registrar.syncFailover).not.toHaveBeenCalled();
   });
 
   it("deletes a chain only after confirmation", async () => {
@@ -344,6 +405,68 @@ describe("ChainsTab", () => {
     ]);
   });
 
+  it("moves targets down with lowercase j and back up with lowercase k", async () => {
+    const { deps, config } = await makeHarness([
+      chain("coding", [target("first"), target("second")]),
+    ]);
+    const tab = createTab(deps);
+
+    await tab.handleInput(Key.enter);
+    await tab.handleInput("j");
+    expect(config.get().chains[0]?.targets.map(({ provider }) => provider)).toEqual([
+      "second",
+      "first",
+    ]);
+    await tab.handleInput("k");
+    expect(config.get().chains[0]?.targets.map(({ provider }) => provider)).toEqual([
+      "first",
+      "second",
+    ]);
+  });
+
+  it("sorts all Chain targets by multiplier in both directions", async () => {
+    const sortModels: ModelsJson = {
+      providers: {
+        high: providerForSort("high", 2),
+        "tied-first": providerForSort("tied-first", 0.5),
+        "tied-second": providerForSort("tied-second", 0.5),
+        missing: providerForSort("missing"),
+      },
+    };
+    const { deps, config, registrar } = await makeHarness(
+      [
+        chain("coding", [
+          target("high"),
+          target("tied-first"),
+          target("tied-second"),
+          target("missing"),
+        ]),
+      ],
+      {},
+      sortModels,
+    );
+    const tab = createTab(deps);
+
+    await tab.handleInput(Key.enter);
+    await tab.handleInput("s");
+    expect(config.get().chains[0]?.targets.map(({ provider }) => provider)).toEqual([
+      "tied-first",
+      "tied-second",
+      "missing",
+      "high",
+    ]);
+    expect(registrar.syncFailover).toHaveBeenCalledTimes(1);
+
+    await tab.handleInput("s");
+    expect(config.get().chains[0]?.targets.map(({ provider }) => provider)).toEqual([
+      "high",
+      "missing",
+      "tied-first",
+      "tied-second",
+    ]);
+    expect(registrar.syncFailover).toHaveBeenCalledTimes(2);
+  });
+
   it("resets every target in a chain after R confirmation", async () => {
     const { deps, state, history } = await makeHarness([
       chain("coding", [target("first"), target("second")]),
@@ -372,5 +495,35 @@ describe("ChainsTab", () => {
       await tab.handleInput(Key.enter);
       expect(tab.render(78, listRows)).toHaveLength(listRows + 1);
     }
+  });
+
+  it("renders only number, target, multiplier, and status in the target header", async () => {
+    const { deps } = await makeHarness([chain("coding", [target("first"), target("second")])]);
+    const tab = createTab(deps);
+    await vi.waitFor(() => expect(deps.state.read).toHaveBeenCalled());
+
+    await tab.handleInput(Key.enter);
+    const rendered = tab.render(100, 7).join("\n");
+
+    expect(rendered).toContain(S.chains.targetLabels.target);
+    expect(rendered).toContain(S.chains.targetLabels.multiplier);
+    expect(rendered).toContain(S.chains.targetLabels.status);
+    expect(rendered).not.toContain("Retries");
+    expect(rendered).not.toContain("TTFT");
+    expect(rendered).toContain("first/m");
+  });
+
+  it("keeps the target reference readable in a narrow terminal", async () => {
+    const { deps } = await makeHarness([
+      chain("coding", [target("long-provider-name"), target("second")]),
+    ]);
+    const tab = createTab(deps);
+    await vi.waitFor(() => expect(deps.state.read).toHaveBeenCalled());
+
+    await tab.handleInput(Key.enter);
+    const row = tab.render(60, 7).find((line) => line.includes("long-provider-name"));
+
+    expect(row).toBeDefined();
+    expect(row).toContain("long-provider-name");
   });
 });

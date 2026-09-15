@@ -1,6 +1,6 @@
 import type { WriteQueue } from "../config/writeQueue.js";
 import type { FileSystem } from "../domain/ports.js";
-import type { FailoverEvent, TargetRef } from "../domain/types.js";
+import type { FailoverErrorDetails, FailoverEvent, TargetRef } from "../domain/types.js";
 
 const DEFAULT_CAP = 500;
 const FIXED_REASONS = new Set(["network", "ttft-timeout", "no-progress", "persistent", "manual"]);
@@ -31,6 +31,18 @@ function isFailoverEvent(value: unknown): value is FailoverEvent {
     Number.isFinite(event.elapsedMs) &&
     event.elapsedMs >= 0
   );
+}
+
+function errorDetails(value: unknown): FailoverErrorDetails | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const details: FailoverErrorDetails = {};
+  if (typeof record.status === "number" && Number.isFinite(record.status)) {
+    details.status = record.status;
+  }
+  if (typeof record.code === "string") details.code = record.code;
+  if (typeof record.body === "string") details.body = record.body;
+  return Object.keys(details).length === 0 ? undefined : details;
 }
 
 function providerOf(ref: TargetRef): string {
@@ -106,8 +118,13 @@ export class HistoryLog {
       if (line.trim() === "") continue;
       try {
         const value: unknown = JSON.parse(line);
-        if (isFailoverEvent(value)) events.push(value);
-        else dropped++;
+        if (!isFailoverEvent(value)) {
+          dropped++;
+          continue;
+        }
+        const { error: rawError, ...rest } = value as FailoverEvent & { error?: unknown };
+        const details = errorDetails(rawError);
+        events.push(details === undefined ? rest : { ...rest, error: details });
       } catch {
         dropped++;
       }

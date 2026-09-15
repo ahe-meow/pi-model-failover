@@ -136,7 +136,7 @@ async function submitManualId(target: InputTarget, id: string): Promise<void> {
   for (const character of id) await input(target, character);
   for (let index = 0; index < 5; index++) await input(target, Key.down);
   await input(target, Key.enter);
-  await input(target, Key.enter);
+  await input(target, Key.ctrl("s"));
 }
 
 describe("CatalogScreen", () => {
@@ -311,10 +311,11 @@ describe("CatalogScreen", () => {
     await input(screen, "+");
     for (let index = 0; index < 5; index++) await input(screen, Key.down);
     await input(screen, Key.enter);
-    await input(screen, Key.enter);
+    await input(screen, Key.ctrl("s"));
 
     const rendered = screen.render(100, 5).join("\\n");
     expect(rendered).toContain(S.modelManager.catalog.labels.maxTokens);
+
     expect(rendered).toContain(S.modelManager.catalog.invalidId);
   });
 

@@ -15,6 +15,38 @@ export type FailoverReason =
   | "persistent"
   | "manual";
 
+export const REASONING_LEVELS = ["off", "low", "medium", "high", "xhigh", "max"] as const;
+export type ReasoningLevel = (typeof REASONING_LEVELS)[number];
+export type ReasoningEffort = "inherit" | ReasoningLevel;
+
+export function normalizeReasoningEffort(value: unknown): ReasoningEffort {
+  switch (value) {
+    case "off":
+    case "low":
+    case "medium":
+    case "high":
+    case "xhigh":
+    case "max":
+    case "inherit":
+      return value;
+    case "minimal":
+      return "low";
+    default:
+      return "inherit";
+  }
+}
+
+export function normalizeThinkingLevelMap(
+  reasoning: boolean,
+  thinkingLevelMap?: Record<string, string | null>,
+): Record<string, string | null> | undefined {
+  if (thinkingLevelMap === undefined) {
+    return reasoning ? { minimal: null, xhigh: "xhigh", max: "max" } : undefined;
+  }
+  if (!reasoning) return { ...thinkingLevelMap };
+  return { ...thinkingLevelMap, minimal: null };
+}
+
 export interface CatalogModel {
   id: string;
   name?: string;
@@ -27,7 +59,7 @@ export interface CatalogModel {
 export interface TargetSettings {
   errorHandlingMode: ErrorHandlingMode;
   maxRetries: number;
-  reasoningEffort: "inherit" | "minimal" | "low" | "medium" | "high";
+  reasoningEffort: ReasoningEffort;
   modelParameters: Record<string, unknown>;
   noProgressTimeoutSeconds: number;
   ttftTimeoutSeconds: number;
@@ -58,6 +90,11 @@ export interface TargetState {
   manualRecovery: boolean;
   lastFailure: { ts: string; reason: FailoverReason } | null;
 }
+export interface FailoverErrorDetails {
+  status?: number;
+  code?: string;
+  body?: string;
+}
 export interface FailoverEvent {
   ts: string;
   sessionId: string;
@@ -66,6 +103,7 @@ export interface FailoverEvent {
   to: TargetRef | null;
   reason: FailoverReason;
   elapsedMs: number;
+  error?: FailoverErrorDetails;
 }
 
 export interface ModelNode {

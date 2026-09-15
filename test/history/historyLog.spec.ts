@@ -82,6 +82,59 @@ describe("HistoryLog", () => {
     await expect(log.list()).resolves.toEqual({ events: [event(1)], dropped: 1 });
   });
 
+  it("keeps a valid event with malformed error detail and does not rewrite the line", async () => {
+    const fs = new MemoryFs();
+    const log = await HistoryLog.open(fs, new WriteQueue(), "/d");
+    const detailed = {
+      ...event(1),
+      error: { status: 401, code: "invalid_api_key", body: "bad key" },
+      pluginNote: "kept",
+    };
+    const malformed = { ...event(2), error: "not an object" };
+    const source = `${JSON.stringify(detailed)}\n${JSON.stringify(malformed)}\n`;
+    fs.files.set("/d/history.jsonl", source);
+    const write = vi.spyOn(fs, "writeAtomic");
+
+    const { events, dropped } = await log.list();
+
+    expect(dropped).toBe(0);
+    expect(events[0]).toMatchObject({ requestSeq: 2 });
+    expect(events[0]).not.toHaveProperty("error");
+    expect(events[1]).toMatchObject({
+      requestSeq: 1,
+      pluginNote: "kept",
+      error: { status: 401, code: "invalid_api_key", body: "bad key" },
+    });
+    expect(write).not.toHaveBeenCalled();
+    expect(fs.files.get("/d/history.jsonl")).toBe(source);
+  });
+
+  it("normalizes error detail fields and omits an empty detail", async () => {
+    const fs = new MemoryFs();
+    const partial = { ...event(1), error: { status: 503, code: 7, body: null } };
+    const empty = { ...event(2), error: {} };
+    const nonFinite = { ...event(3), error: [] };
+    fs.files.set(
+      "/d/history.jsonl",
+      `${JSON.stringify(partial)}\n${JSON.stringify(empty)}\n${JSON.stringify(nonFinite)}\n`,
+    );
+    const log = await HistoryLog.open(fs, new WriteQueue(), "/d");
+
+    const { events, dropped } = await log.list();
+
+    expect(dropped).toBe(0);
+    expect(events.map((entry) => entry.error)).toEqual([undefined, undefined, { status: 503 }]);
+  });
+
+  it("keeps a legacy persistent reason valid", async () => {
+    const fs = new MemoryFs();
+    const legacy = { ...event(1), reason: "persistent" as const };
+    fs.files.set("/d/history.jsonl", `${JSON.stringify(legacy)}\n`);
+    const log = await HistoryLog.open(fs, new WriteQueue(), "/d");
+
+    await expect(log.list()).resolves.toEqual({ events: [legacy], dropped: 0 });
+  });
+
   it("C18: filters by provider at either event endpoint", async () => {
     const fs = new MemoryFs();
     const log = await HistoryLog.open(fs, new WriteQueue(), "/d");

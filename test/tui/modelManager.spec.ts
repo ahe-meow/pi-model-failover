@@ -104,6 +104,17 @@ describe("ModelManagerTab provider list and detail", () => {
     expect(detail).not.toContain(LIVE_API_KEY);
   });
 
+  it("opens the multiplier input directly from the provider list", async () => {
+    const tab = new ModelManagerTab(await makeDeps(models));
+
+    await tab.handleInput("m");
+
+    expect(tab.isEditing()).toBe(true);
+    expect(tab.render(78, 7).join("\n")).toContain(
+      S.form.inputTitle(S.modelManager.providerForm.labels.multiplier),
+    );
+  });
+
   it("filters the provider list with a draft that cancels and an applied query that clears", async () => {
     const source = structuredClone(models);
     const relay = copyRelay(source);
@@ -410,12 +421,12 @@ describe("ModelManagerTab provider list and detail", () => {
     await tab.handleInput("r");
     for (let index = 0; index < "Other".length; index++) await tab.handleInput(Key.backspace);
     for (const character of "Renamed") await tab.handleInput(character);
-    await tab.handleInput(Key.enter);
+    await tab.handleInput(Key.ctrl("s"));
 
     await tab.handleInput("m");
     for (let index = 0; index < "0.1".length; index++) await tab.handleInput(Key.backspace);
     for (const character of "0.25") await tab.handleInput(character);
-    await tab.handleInput(Key.enter);
+    await tab.handleInput(Key.ctrl("s"));
 
     const saved = await deps.modelsFile.read();
     expect(saved.providers.relay?.name).toBe("Relay");
@@ -480,5 +491,22 @@ describe("ModelManagerTab provider list and detail", () => {
     expect(() => tab.handleInput("c")).not.toThrow();
     expect(() => tab.handleInput(Key.home)).not.toThrow();
     expect(() => tab.handleInput(Key.end)).not.toThrow();
+  });
+
+  it("follows the provider selection to a renamed provider id", async () => {
+    const deps = await makeDeps(models);
+    const tab = new ModelManagerTab(deps);
+
+    await tab.handleInput(Key.enter);
+    await tab.handleInput("e");
+    for (let index = 0; index < "relay".length; index++) await tab.handleInput(Key.backspace);
+    for (const character of "renamed") await tab.handleInput(character);
+    for (let index = 0; index < 7; index++) await tab.handleInput(Key.down);
+    await tab.handleInput(Key.ctrl("s"));
+
+    const detail = tab.render(78, 7).join("\n");
+    expect(detail).toContain("renamed");
+    expect(detail).toContain("m");
+    expect((await deps.modelsFile.read()).providers.renamed).toBeDefined();
   });
 });

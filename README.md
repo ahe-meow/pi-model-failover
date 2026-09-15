@@ -43,12 +43,13 @@ Typical flow:
 3. Select `failover/<chain-id>` from Pi's normal model picker.
 4. Inspect failures in **History**; use `r` to reset a recovered Target after fixing its credentials.
 
-The Chain detail view shows the effective context window, reasoning support, input types, retry mode, TTFT settings, and current Target status (`ok`, `cool`, or `manual`).
+The Chain detail view lists each Target's number, `provider/modelId`, cost multiplier, and current status (`ok`, `cool`, or `manual`); retry mode, TTFT settings, and per-target `reasoningEffort` live in the Target settings form opened with `Enter`.
 
 ## Failover behavior
 
 - HTTP 5xx, network errors, TTFT timeouts, and no-progress timeouts can move the request to the next Target.
-- HTTP 401-style persistent failures enter **Manual Recovery** and stay excluded until reset.
+- HTTP 401-style persistent failures enter **Manual Recovery**, stay excluded until reset, and still record their real reason (`http-401`, `http-402`, `http-403`, `http-404`, or quota/billing `http-429`).
+- **History** shows the real HTTP reason plus the provider's structured error detail (`status`, `code`, and response `body`); the body is redacted before it is written.
 - Cooldowns use the capped ladder `1 / 5 / 15 / 60` minutes.
 - A request-parameter rejection can retry once without the rejected parameter and does not raise a cooldown.
 - `ttftAction: cooldown-only` lets the current request finish; `ttftAction: abort` cancels the attempt and switches during the same request.
@@ -59,7 +60,7 @@ The Chain detail view shows the effective context window, reasoning support, inp
 
 The extension uses Pi's existing `models.json` provider format and registration APIs. It adds only its own managed provider nodes and the reserved `failover` Virtual Models. Pi's built-in providers and the existing Model Manager continue to work normally.
 
-Provider deletion removes the selected provider node, removes its Targets from affected Chains, and refreshes the affected Virtual Models. The extension does not migrate V1 configuration or rewrite unrelated `models.json` fields.
+Provider deletion removes the selected provider node, removes its Targets from affected Chains, and refreshes the affected Virtual Models. Renaming a provider ID moves the `models.json` key, rewrites matching Chain Targets, and carries the Target's cooldown and Manual Recovery state to the new ID; past History rows keep the ID they were recorded with. The extension does not migrate V1 configuration or rewrite unrelated `models.json` fields.
 
 ## Files and permissions
 

@@ -66,6 +66,10 @@ function cursorValue(value: string, cursor: number, width: number): string {
   }
 }
 
+export interface FormOptions {
+  exitOnEscape?: boolean;
+}
+
 export class Form {
   focus = 0;
   private cursor = 0;
@@ -78,6 +82,7 @@ export class Form {
     private fields: Field[],
     private onSubmit: (values: Record<string, unknown>) => void,
     private onCancel: () => void,
+    private readonly options: FormOptions = {},
   ) {}
 
   values(): Record<string, unknown> {
@@ -103,13 +108,23 @@ export class Form {
   }
 
   handleInput(data: string): void {
+    if (isKey(data, Key.ctrl("s"))) {
+      if (this.editing) this.commitEditor();
+      this.directEdit = false;
+      this.onSubmit(this.values());
+      return;
+    }
     if (this.editing) {
       this.handleEditorInput(data);
       return;
     }
     const field = this.fields[this.focus];
     if (!field) return;
-    if (field.kind === "text" && field.multiline && /^[\r\n]$/.test(data)) {
+    if (
+      field.kind === "text" &&
+      field.multiline &&
+      (isKey(data, Key.enter) || /^[\r\n]$/.test(data))
+    ) {
       field.value += "\n";
       this.directEdit = true;
       return;
@@ -208,12 +223,8 @@ export class Form {
       return true;
     }
     if (isKey(data, Key.enter)) {
-      if (this.directEdit && this.focus === this.fields.length - 1) {
-        this.directEdit = false;
-        this.onSubmit(this.values());
-      } else {
-        this.beginEditing();
-      }
+      if (this.directEdit) this.directEdit = false;
+      else this.beginEditing();
       return true;
     }
     return false;
@@ -243,24 +254,15 @@ export class Form {
       this.draftValue = undefined;
       this.draftText = undefined;
       this.directEdit = false;
+      if (this.options.exitOnEscape) this.onCancel();
       return;
     }
     if (isKey(data, Key.enter)) {
-      if (field.kind === "select") {
-        field.value = field.options[this.cursor] ?? field.value;
-      } else if (field.kind === "number") {
-        const value = Number(this.draftText ?? field.value);
-        if (Number.isFinite(value)) field.value = this.clamp(field, value);
-      } else if (field.kind === "text") {
-        field.value = this.draftText ?? field.value;
-      } else if (this.draftValue !== undefined) {
-        field.value = copyValue(this.draftValue) as never;
+      if (field.kind === "text" && field.multiline) {
+        this.handleEditableInput(field, "\n");
+        return;
       }
-      this.editing = false;
-      this.draftValue = undefined;
-      this.draftText = undefined;
-      this.directEdit = false;
-      if (this.focus === this.fields.length - 1) this.onSubmit(this.values());
+      this.commitEditor();
       return;
     }
     if (field.kind === "select") {
@@ -273,6 +275,25 @@ export class Form {
       return;
     }
     this.handleEditableInput(field, data);
+  }
+
+  private commitEditor(): void {
+    const field = this.fields[this.focus];
+    if (!field) return;
+    if (field.kind === "select") {
+      field.value = field.options[this.cursor] ?? field.value;
+    } else if (field.kind === "number") {
+      const value = Number(this.draftText ?? field.value);
+      if (Number.isFinite(value)) field.value = this.clamp(field, value);
+    } else if (field.kind === "text") {
+      field.value = this.draftText ?? field.value;
+    } else if (this.draftValue !== undefined) {
+      field.value = copyValue(this.draftValue) as never;
+    }
+    this.editing = false;
+    this.draftValue = undefined;
+    this.draftText = undefined;
+    this.directEdit = false;
   }
 
   private handleEditableInput(

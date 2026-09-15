@@ -55,10 +55,10 @@ export function classify(e: FailureInput): Classification {
   if (e.timer === "no-progress") return { cls: "cooldown", reason: "no-progress" };
 
   if (status !== undefined && PERSISTENT_STATUSES.has(status)) {
-    return { cls: "persistent", reason: "persistent" };
+    return { cls: "persistent", reason: httpReason(status) };
   }
   if (status === 429 && QUOTA_OR_BILLING.test(body ?? "")) {
-    return { cls: "persistent", reason: "persistent" };
+    return { cls: "persistent", reason: httpReason(status) };
   }
 
   if (status === 400 && body !== undefined) {

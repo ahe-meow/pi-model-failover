@@ -18,6 +18,11 @@ export interface ModelManagerDeps {
   fetch?: Fetch;
   runtimeFactory?: () => Promise<{ getModels(): unknown[] }>;
   afterProviderDelete?: (providerId: string, models: ModelsJson) => Promise<void>;
+  afterProviderRename?: (
+    previousId: string,
+    providerId: string,
+    models: ModelsJson,
+  ) => Promise<void>;
 }
 
 export type Screen = "list" | "detail" | "form" | "catalog";

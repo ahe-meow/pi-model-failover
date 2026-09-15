@@ -43,6 +43,8 @@ const target = (provider: string, overrides: Partial<Target> = {}): Target => ({
 const chainOf = (...targets: Target[]): Chain => ({ id: "coding", name: "Coding", targets });
 const chainAB = (a: Partial<Target> = {}, b: Partial<Target> = {}): Chain =>
   chainOf(target("a", a), target("b", b));
+const chainABC = chainOf(target("a"), target("b"), target("c"));
+const signal = new AbortController().signal;
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
   const promise = new Promise<void>((done) => {
@@ -78,15 +80,22 @@ interface ControlledAttempt {
   release: () => void;
   aborts: () => number;
 }
-function waitBeforeMeaningful(payload: unknown): ControlledAttempt {
+type GateMode = "before" | "after-nonmeaningful" | "after-meaningful" | "only";
+function gatedAttempt(mode: GateMode, payload: unknown): ControlledAttempt {
   const gate = deferred();
   let abortCount = 0;
   return {
     attempt: {
       events: (async function* () {
+        if (mode === "after-nonmeaningful" || mode === "after-meaningful") {
+          yield { meaningful: mode === "after-meaningful", payload };
+        }
         await gate.promise;
-        yield { meaningful: true, payload };
-        yield { meaningful: false, payload: "done", done: true };
+        if (mode === "before") {
+          yield { meaningful: true, payload };
+          yield { meaningful: false, payload: "done", done: true };
+        }
+        if (mode === "after-meaningful") yield { meaningful: false, payload: "done", done: true };
       })(),
       abort: () => {
         abortCount++;
@@ -97,64 +106,15 @@ function waitBeforeMeaningful(payload: unknown): ControlledAttempt {
     aborts: () => abortCount,
   };
 }
-function waitAfterNonmeaningful(payload: unknown): ControlledAttempt {
-  const gate = deferred();
-  let abortCount = 0;
-  return {
-    attempt: {
-      events: (async function* () {
-        yield { meaningful: false, payload };
-        await gate.promise;
-      })(),
-      abort: () => {
-        abortCount++;
-        gate.resolve();
-      },
-    },
-    release: gate.resolve,
-    aborts: () => abortCount,
-  };
-}
-function waitAfterMeaningful(payload: unknown): ControlledAttempt {
-  const gate = deferred();
-  let abortCount = 0;
-  return {
-    attempt: {
-      events: (async function* () {
-        yield { meaningful: true, payload };
-        await gate.promise;
-        yield { meaningful: false, payload: "done", done: true };
-      })(),
-      abort: () => {
-        abortCount++;
-        gate.resolve();
-      },
-    },
-    release: gate.resolve,
-    aborts: () => abortCount,
-  };
-}
-function pendingAttempt(): ControlledAttempt {
-  const gate = deferred();
-  let abortCount = 0;
-  return {
-    attempt: {
-      events: (async function* () {
-        yield* [] as StreamChunk[];
-        await gate.promise;
-      })(),
-      abort: () => {
-        abortCount++;
-        gate.resolve();
-      },
-    },
-    release: gate.resolve,
-    aborts: () => abortCount,
-  };
-}
+const waitBeforeMeaningful = (payload: unknown): ControlledAttempt =>
+  gatedAttempt("before", payload);
+const waitAfterNonmeaningful = (payload: unknown): ControlledAttempt =>
+  gatedAttempt("after-nonmeaningful", payload);
+const waitAfterMeaningful = (payload: unknown): ControlledAttempt =>
+  gatedAttempt("after-meaningful", payload);
+const pendingAttempt = (): ControlledAttempt => gatedAttempt("only", undefined);
 class ObservableClock extends FakeClock {
   readonly sleeps: number[] = [];
-
   override sleep(ms: number, signal?: AbortSignal): Promise<void> {
     this.sleeps.push(ms);
     return super.sleep(ms, signal);
@@ -162,7 +122,6 @@ class ObservableClock extends FakeClock {
 }
 class AdvancingClock extends FakeClock {
   readonly sleeps: number[] = [];
-
   override sleep(ms: number, signal?: AbortSignal): Promise<void> {
     if (signal?.aborted) return Promise.reject(new Error("aborted"));
     this.sleeps.push(ms);
@@ -257,6 +216,7 @@ describe("runChain", () => {
       requestSeq: 7,
       elapsedMs: 0,
     });
+    expect(history[0]?.error).toEqual({ status: 503 });
     expect(deps.state.snapshot()["a/m"]?.cooldownLevel).toBe(1);
     expect(deps.state.snapshot()["b/m"]).toEqual(reset());
   });
@@ -276,10 +236,10 @@ describe("runChain", () => {
     await expect(
       collect(runChain(deps.deps, chainAB(), settings(), 2, new AbortController().signal)),
     ).resolves.toEqual(["from-b"]);
-
     expect(sent).toEqual(["a/m", "b/m", "b/m"]);
     expect(history).toHaveLength(1);
-    expect(history[0]).toMatchObject({ from: "a/m", to: "b/m", reason: "persistent" });
+    expect(history[0]).toMatchObject({ from: "a/m", to: "b/m", reason: "http-401" });
+    expect(history[0]?.error).toEqual({ status: 401 });
     expect(deps.state.snapshot()["a/m"]?.manualRecovery).toBe(true);
   });
   it("C10: cooldown-only TTFT lets A finish and cools it for the next request", async () => {
@@ -295,9 +255,7 @@ describe("runChain", () => {
         return ref === "a/m" ? first.attempt : successfulAttempt("from-b");
       },
     });
-    const running = collect(
-      runChain(deps.deps, chainAB(), settings(), 3, new AbortController().signal),
-    );
+    const running = collect(runChain(deps.deps, chainAB(), settings(), 3, signal));
     await waitFor(() => clock.sleeps.includes(60_000));
     clock.advance(60_000);
     first.release();
@@ -305,7 +263,8 @@ describe("runChain", () => {
     await expect(running).resolves.toEqual(["from-a", "done"]);
     expect(sent).toEqual(["a/m"]);
     expect(history).toHaveLength(1);
-    expect(history[0]).toMatchObject({ from: "a/m", to: null, reason: "ttft-timeout" });
+    expect(history[0]).toMatchObject({ from: "a/m", to: "b/m", reason: "ttft-timeout" });
+    expect(history[0]).not.toHaveProperty("error");
     expect(deps.state.snapshot()["a/m"]?.cooldownUntil).toBe(new Date(120_000).toISOString());
   });
   it("C11: abort TTFT discards A partial output and B wins in the same request", async () => {
@@ -339,6 +298,42 @@ describe("runChain", () => {
     expect(history).toHaveLength(1);
     expect(history[0]).toMatchObject({ from: "a/m", to: "b/m", reason: "ttft-timeout" });
   });
+  it("records the real HTTP reason and normalized error detail for a persistent failure", async () => {
+    const history: FailoverEvent[] = [];
+    const deps = makeEngine({
+      history,
+      send: async (ref) =>
+        ref === "a/m"
+          ? throwingAttempt({ status: 401, code: "invalid_api_key", body: "invalid api key" })
+          : successfulAttempt("from-b"),
+    });
+
+    await expect(collect(runChain(deps.deps, chainAB(), settings(), 21, signal))).resolves.toEqual([
+      "from-b",
+    ]);
+
+    expect(history[0]).toMatchObject({
+      from: "a/m",
+      to: "b/m",
+      reason: "http-401",
+      error: { status: 401, code: "invalid_api_key", body: "invalid api key" },
+    });
+    expect(deps.state.snapshot()["a/m"]?.manualRecovery).toBe(true);
+  });
+  it("redacts secrets before writing an error body to history", async () => {
+    const history: FailoverEvent[] = [];
+    const deps = makeEngine({
+      history,
+      send: async (ref) =>
+        ref === "a/m"
+          ? throwingAttempt({ status: 503, body: "upstream rejected api_key=abcdefgh" })
+          : successfulAttempt("from-b"),
+    });
+
+    await collect(runChain(deps.deps, chainAB(), settings(), 22, signal));
+
+    expect(history[0]?.error?.body).toBe("upstream rejected api_key=abc…efgh");
+  });
   it("C12: no-progress aborts after the first meaningful delta", async () => {
     const clock = new ObservableClock();
     const first = waitAfterMeaningful("partial-from-a");
@@ -363,8 +358,8 @@ describe("runChain", () => {
     expect(sent).toEqual(["a/m", "b/m"]);
     expect(history).toHaveLength(1);
     expect(history[0]).toMatchObject({ from: "a/m", to: "b/m", reason: "no-progress" });
+    expect(history[0]).not.toHaveProperty("error");
   });
-
   it("retry mode advances after timer failure without backoff", async () => {
     for (const [first, targetOptions, reason] of [
       [
@@ -464,21 +459,13 @@ describe("runChain", () => {
       },
     });
     await expect(
-      collect(
-        runChain(
-          deps.deps,
-          chainOf(target("a"), target("b"), target("c")),
-          settings(),
-          8,
-          new AbortController().signal,
-        ),
-      ),
+      collect(runChain(deps.deps, chainABC, settings(), 8, signal)),
     ).rejects.toMatchObject({ status: 503 });
     expect(sent).toEqual(["a/m", "b/m"]);
     expect(history).toHaveLength(2);
     expect(history.map(({ from, to }) => [from, to])).toEqual([
       ["a/m", "b/m"],
-      ["b/m", null],
+      ["b/m", "c/m"],
     ]);
   });
   it("switch never retries after a cooldown-class failure", async () => {
@@ -519,7 +506,6 @@ describe("runChain", () => {
         return successfulAttempt("from-b");
       },
     });
-
     await expect(
       collect(
         runChain(
@@ -549,7 +535,6 @@ describe("runChain", () => {
           : successfulAttempt("network-recovered");
       },
     });
-
     await expect(
       collect(
         runChain(first.deps, chainOf(target("a")), settings(), 11, new AbortController().signal),
@@ -557,7 +542,6 @@ describe("runChain", () => {
     ).resolves.toEqual(["network-recovered"]);
     expect(retried).toEqual(["a/m", "a/m"]);
     expect(first.history).toHaveLength(0);
-
     const switched: string[] = [];
     const history: FailoverEvent[] = [];
     const second = makeEngine({
@@ -567,7 +551,6 @@ describe("runChain", () => {
         return ref === "a/m" ? throwingAttempt({ status: 503 }) : successfulAttempt("from-b");
       },
     });
-
     await expect(
       collect(runChain(second.deps, chainAB(), settings(), 12, new AbortController().signal)),
     ).resolves.toEqual(["from-b"]);
@@ -588,13 +571,29 @@ describe("runChain", () => {
     const running = collect(
       runChain(deps.deps, chainOf(target("a")), settings(), 13, controller.signal),
     );
-
     await waitFor(() => clock.sleeps.includes(60_000));
     controller.abort();
-
     await expect(running).rejects.toThrow(/abort/i);
     expect(first.aborts()).toBe(1);
     expect(history).toHaveLength(0);
     expect(deps.state.updates).toBe(0);
+  });
+  it("records the physical next target even when it is excluded", async () => {
+    const deps = makeEngine({
+      initialState: { "b/m": applyFailure(reset(), "http-503", 0) },
+      send: async () => throwingAttempt({ status: 503 }),
+    });
+    const stream = collect(runChain(deps.deps, chainABC, settings(), 23, signal));
+    await expect(stream).rejects.toMatchObject({ status: 503 });
+    expect(deps.history.map(({ from, to }) => [from, to])).toEqual([
+      ["a/m", "b/m"],
+      ["c/m", null],
+    ]);
+  });
+  it("records a null next target only after the final physical target", async () => {
+    const deps = makeEngine({ send: async () => throwingAttempt({ status: 503 }) });
+    const stream = collect(runChain(deps.deps, chainOf(target("a")), settings(), 24, signal));
+    await expect(stream).rejects.toMatchObject({ status: 503 });
+    expect(deps.history[0]).toMatchObject({ from: "a/m", to: null });
   });
 });

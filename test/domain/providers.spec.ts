@@ -6,6 +6,7 @@ import {
   providersWithModel,
   removeModel,
   renameProvider,
+  renameProviderId,
   setMultiplier,
   upsertProvider,
 } from "../../src/domain/providers.js";
@@ -262,5 +263,41 @@ describe("immutable provider operations", () => {
 
     expect(next).toEqual(source);
     expect(next).not.toBe(source);
+  });
+
+  it("moves a provider key in place and preserves node data and key order", () => {
+    const source: ModelsJson = {
+      providers: {
+        first: emptyProvider("first"),
+        relay: {
+          ...emptyProvider("relay"),
+          unknownProvider: { nested: { keep: true } },
+          piModelFailover: { group: "kg-1", costMultiplier: 0.2 },
+        },
+      },
+    };
+    const before = structuredClone(source);
+
+    const next = renameProviderId(source, "relay", "renamed");
+
+    expect(Object.keys(next.providers)).toEqual(["first", "renamed"]);
+    expect(next.providers.renamed).toEqual(before.providers.relay);
+    expect(source).toEqual(before);
+    expect(next.providers).not.toBe(source.providers);
+  });
+
+  it.each([
+    ["same id", "relay", "relay"],
+    ["occupied destination", "relay", "other"],
+    ["missing source", "absent", "renamed"],
+  ])("leaves providers unchanged for %s", (_label, oldId, newId) => {
+    const source: ModelsJson = {
+      providers: {
+        relay: emptyProvider("relay"),
+        other: emptyProvider("other"),
+      },
+    };
+
+    expect(renameProviderId(source, oldId, newId).providers).toEqual(source.providers);
   });
 });

@@ -1,4 +1,4 @@
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { Key, type KeyId, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 import { createKeyGroup, type KeyEntry } from "../../../domain/keyGroups.js";
 import { upsertProvider } from "../../../domain/providers.js";
 import { redactSecret } from "../../../domain/redact.js";
@@ -11,6 +11,10 @@ import type { ModelManagerDeps } from "../modelManager.js";
 
 const API_OPTIONS = S.modelManager.keyGroupForm.apiOptions as readonly ApiType[];
 const KEY_FIELD = "keys";
+
+function isKey(data: string, key: KeyId): boolean {
+  return data === key || matchesKey(data, key);
+}
 
 type ParsedValues = {
   prefix: string;
@@ -109,11 +113,82 @@ function displayHeader(value: string): string {
   return `${name}: ${redactedKey(headerValue)}`;
 }
 
+class KeyEntryEditor {
+  private readonly rows: string[];
+
+  constructor(
+    value: string,
+    private readonly onSave: (value: string) => void,
+    private readonly onCancel: () => void,
+  ) {
+    const initial = value === "" ? [] : value.split(/\r?\n/).filter((line) => Boolean(line.trim()));
+    this.rows = [...initial, ""];
+  }
+
+  render(width: number, listRows: number): string[] {
+    const last = this.rows.length - 1;
+    const body = this.rows.map((value, index) => {
+      const marker = index === last ? "▶ " : "  ";
+      const cursor = index === last ? S.form.cursor : "";
+      return truncateToWidth(`${marker}${value}${cursor}`, width);
+    });
+    const rows = Math.max(0, listRows);
+    const start = Math.max(0, body.length - rows);
+    const visible = body.slice(start, start + rows);
+    while (visible.length < rows) visible.push("");
+    return [
+      truncateToWidth(theme.title(S.modelManager.keyGroupForm.keyEntryTitle), width),
+      ...visible,
+    ];
+  }
+
+  handleInput(data: string): void {
+    if (isKey(data, Key.ctrl("s"))) {
+      this.onSave(
+        this.rows
+          .map((row) => row.trim())
+          .filter(Boolean)
+          .join("\n"),
+      );
+      return;
+    }
+    if (isKey(data, Key.escape)) {
+      this.onCancel();
+      return;
+    }
+    if (isKey(data, Key.enter)) {
+      this.commit();
+      return;
+    }
+    if (isKey(data, Key.backspace)) {
+      const index = this.rows.length - 1;
+      this.rows[index] = this.rows[index]?.slice(0, -1) ?? "";
+      return;
+    }
+    const lines = data.split(/\r\n|\n|\r/);
+    if (lines.some((line) => [...line].some((character) => character.charCodeAt(0) < 32))) return;
+    for (const [index, line] of lines.entries()) {
+      const row = this.rows.length - 1;
+      this.rows[row] = `${this.rows[row] ?? ""}${line}`;
+      if (index < lines.length - 1) this.commit();
+    }
+  }
+
+  private commit(): void {
+    const index = this.rows.length - 1;
+    const row = this.rows[index]?.trim() ?? "";
+    if (row === "") return;
+    this.rows[index] = row;
+    this.rows.push("");
+  }
+}
+
 export class KeyGroupForm implements TabComponent {
   private readonly fields: Field[];
   private readonly form: Form;
   private pending = Promise.resolve();
   private error: string | undefined;
+  private keyEntry: KeyEntryEditor | undefined;
 
   constructor(private readonly deps: ModelManagerDeps & { onDone: (models: ModelsJson) => void }) {
     const labels = S.modelManager.keyGroupForm.labels;
@@ -169,6 +244,7 @@ export class KeyGroupForm implements TabComponent {
   }
 
   render(width: number, listRows: number): string[] {
+    if (this.keyEntry !== undefined) return this.keyEntry.render(width, listRows);
     if (this.form.isEditing()) {
       return [
         truncateToWidth(theme.title(S.modelManager.keyGroupForm.title), width),
@@ -194,22 +270,48 @@ export class KeyGroupForm implements TabComponent {
 
   async handleInput(data: string): Promise<void> {
     this.error = undefined;
-    this.form.handleInput(data);
+    if (this.keyEntry !== undefined) {
+      this.keyEntry.handleInput(data);
+      return;
+    }
+    const keysFocused = this.form.focus === this.fields.length - 1;
+    if (!this.form.isEditing() && keysFocused && isKey(data, Key.enter)) {
+      this.openKeyEntry();
+    } else {
+      this.form.handleInput(data);
+    }
     const operation = this.pending;
     await operation;
     if (this.pending === operation) this.pending = Promise.resolve();
   }
 
   isEditing(): boolean {
-    return this.form.isEditing();
+    return this.keyEntry !== undefined || this.form.isEditing();
   }
 
   hints(): Array<[string, string]> {
-    return S.hints.form;
+    return this.keyEntry !== undefined ? S.hints.keyEntry : S.hints.form;
   }
 
   helpTitle(): string {
-    return S.modelManager.keyGroupForm.title;
+    return this.keyEntry !== undefined
+      ? S.modelManager.keyGroupForm.keyEntryTitle
+      : S.modelManager.keyGroupForm.title;
+  }
+
+  private openKeyEntry(): void {
+    const field = this.fields[this.fields.length - 1];
+    if (field?.kind !== "text") return;
+    this.keyEntry = new KeyEntryEditor(
+      field.value,
+      (value) => {
+        field.value = value;
+        this.keyEntry = undefined;
+      },
+      () => {
+        this.keyEntry = undefined;
+      },
+    );
   }
 
   private renderField(field: Field, index: number, width: number): string[] {

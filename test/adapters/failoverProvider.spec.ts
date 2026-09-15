@@ -6,8 +6,8 @@ import {
   type Context,
   createAssistantMessageEventStream,
   type Model,
+  type ModelThinkingLevel,
   type SimpleStreamOptions,
-  type ThinkingLevel,
 } from "@earendil-works/pi-ai";
 import { ModelRuntime, type ProviderConfig } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
@@ -159,7 +159,7 @@ interface HarnessOptions {
   registry?: ModelRegistryLike;
   streamFactory?: (call: number) => AssistantMessageEventStream;
   clock?: Clock;
-  thinkingLevel?: ThinkingLevel;
+  thinkingLevel?: ModelThinkingLevel;
   initialState?: Record<TargetRef, TargetState>;
   settings?: Partial<Settings>;
 }
@@ -248,7 +248,11 @@ describe("failover Provider adapter", () => {
 
     expect(provider.id).toBe("failover");
     expect(provider.config.models).toHaveLength(1);
-    expect(provider.config.models?.[0]).toMatchObject({ id: "coding", name: "Coding" });
+    expect(provider.config.models?.[0]).toMatchObject({
+      id: "coding",
+      name: "Coding",
+      thinkingLevelMap: { xhigh: "xhigh", max: "max", minimal: null },
+    });
     expect(JSON.stringify(provider.config)).not.toContain(PROVIDER_CONFIG_MARKER);
   });
 
@@ -422,7 +426,7 @@ describe("failover Provider adapter", () => {
     }
   });
 
-  it("looks up the target model and auth, overlays parameters, and maps inherit thinking", async () => {
+  it("looks up the target model and auth, overlays parameters, and uses explicit max", async () => {
     const upstream = successfulStream();
     const harness = makeHarness({
       streamFactory: () => upstream,
@@ -430,7 +434,7 @@ describe("failover Provider adapter", () => {
       chains: [
         chain([
           target("relay", {
-            reasoningEffort: "inherit",
+            reasoningEffort: "max" as never,
             modelParameters: { temperature: 0.2, top_p: 0.8 },
           }),
         ]),
@@ -457,7 +461,7 @@ describe("failover Provider adapter", () => {
     });
     expect(requestContext).toEqual(context());
     expect(requestOptions).toMatchObject({
-      reasoning: "high",
+      reasoning: "max",
       temperature: 0.2,
       top_p: 0.8,
       maxTokens: 200,
@@ -466,6 +470,37 @@ describe("failover Provider adapter", () => {
       env: { REGION: "test" },
     });
     expect(requestOptions?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("clamps inherited thinking to the actual target model", async () => {
+    const harness = makeHarness({
+      thinkingLevel: "high",
+      chains: [chain([target("relay", { reasoningEffort: "inherit" })])],
+    });
+    const actual = {
+      ...makeModel(),
+      thinkingLevelMap: { medium: null, high: null, xhigh: null, max: null },
+    };
+    harness.registry.find = vi.fn(() => actual);
+    const outward = createFailoverProvider(harness.deps).config.streamSimple?.(
+      virtualModel(),
+      context(),
+    );
+    await collect(outward as AssistantMessageEventStream);
+    expect(harness.streamSimple.mock.calls[0]?.[2]).toMatchObject({ reasoning: "low" });
+  });
+
+  it("omits reasoning when inherited Pi thinking is off", async () => {
+    const harness = makeHarness({
+      thinkingLevel: "off",
+      chains: [chain([target("relay", { reasoningEffort: "inherit" })])],
+    });
+    const outward = createFailoverProvider(harness.deps).config.streamSimple?.(
+      virtualModel(),
+      context(),
+    );
+    await collect(outward as AssistantMessageEventStream);
+    expect(harness.streamSimple.mock.calls[0]?.[2]).not.toHaveProperty("reasoning");
   });
 
   it("removes a rejected compatibility parameter on the retry", async () => {

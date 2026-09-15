@@ -104,7 +104,7 @@ for each target in candidates:
       └─ error e:
            class = classify(e)
            compatibility-retry → strip offending parameter, retry same target, no penalty, no event
-           persistent          → state.setManualRecovery(target), event(persistent), next target
+           persistent          → state.setManualRecovery(target), event(http-<status>), next target
            cooldown-class      → mode switch: recordFailure, event, next target
                                  mode retry:  attempt < maxRetries ? sleep(backoff(attempt++)) , loop
                                               : recordFailure, event, next target
@@ -115,12 +115,14 @@ all candidates exhausted → throw last error (Pi shows it)
 
 Failure classification (`domain/failureClass.ts`):
 
-| Input | Class |
-| --- | --- |
-| HTTP 429, 500–599, `ECONNRESET`/`ENOTFOUND`/`ETIMEDOUT`, fetch abort by our timers | cooldown-class |
-| HTTP 401, 403, 404; HTTP 402 or 429 whose body contains `quota`, `insufficient_quota`, or `billing` (case-insensitive) | persistent |
-| HTTP 400 with body naming a request parameter we sent (`reasoning_effort`, `temperature`, `max_completion_tokens`, `thinking`) | compatibility-retry |
-| Anything else | cooldown-class |
+| Input | Class | Reason |
+| --- | --- | --- |
+| HTTP 429, 500–599, `ECONNRESET`/`ENOTFOUND`/`ETIMEDOUT`, fetch abort by our timers | cooldown-class | `http-<status>` or `network` |
+| HTTP 401, 403, 404; HTTP 402 or 429 whose body contains `quota`, `insufficient_quota`, or `billing` (case-insensitive) | persistent | the real status: `http-401`, `http-402`, `http-403`, `http-404`, quota/billing `http-429` |
+| HTTP 400 with body naming a request parameter we sent (`reasoning_effort`, `temperature`, `max_completion_tokens`, `thinking`) | compatibility-retry | `http-400` |
+| Anything else | cooldown-class | `http-<status>` or `network` |
+
+The class drives behavior; the reason is what the user sees. A persistent failure still enters Manual Recovery while reporting the real status (`http-401`, `http-402`, `http-403`, `http-404`, or quota/billing `http-429`). `reason: "persistent"` stays in the `FailoverReason` union for reading legacy `state.json` and `history.jsonl` records only; the current classifier never emits it.
 
 Cooldown ladder (`domain/cooldown.ts`): level 1 → 1 min, 2 → 5 min, 3 → 15 min, 4+ → 60 min. `recordSuccess` sets level 0. In-request backoff: `min(1000 * 2^attempt, 60000)` ms.
 
@@ -203,10 +205,10 @@ Target fields other than `provider` and `modelId` are optional; missing ones fal
 One event per line, newest last in file, capped at 500 lines:
 
 ```json
-{"ts":"2025-09-07T12:00:00.000Z","sessionId":"s_abc","requestSeq":17,"from":"relay-1/gpt-4.1","to":"relay-2/gpt-4.1","reason":"http-503","elapsedMs":1240}
+{"ts":"2025-09-07T12:00:00.000Z","sessionId":"s_abc","requestSeq":17,"from":"relay-1/gpt-4.1","to":"relay-2/gpt-4.1","reason":"http-503","elapsedMs":1240,"error":{"status":503,"code":"ETIMEDOUT","body":"upstream …redacted"}}
 ```
 
-`to` is `null` when no further target existed. `reason` ∈ `http-<status> | network | ttft-timeout | no-progress | persistent | manual`. `manual` records a user Reset (`from` = target, `to` = null).
+`to` is the next target in the configured Chain, taken from the physical order of `chain.targets`. It is a real target even when cooldown or Manual Recovery excluded it from this request, and `null` only after the final target. `error` is optional: the engine writes it when the provider error carried a `status`, a `code`, or a body, and the body is passed through `redactFailureBody` before it reaches the file. `reason` ∈ `http-<status> | network | ttft-timeout | no-progress | persistent | manual`; `persistent` is legacy-only. `manual` records a user Reset (`from` = target, `to` = null).
 
 ### Versioning and migration
 

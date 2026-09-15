@@ -9,8 +9,10 @@ import {
 } from "./cooldown.js";
 import { classify, type FailureInput } from "./failureClass.js";
 import type { Clock } from "./ports.js";
+import { redactFailureBody } from "./redact.js";
 import type {
   Chain,
+  FailoverErrorDetails,
   FailoverEvent,
   FailoverReason,
   Settings,
@@ -47,7 +49,7 @@ export interface EngineDeps {
   sessionId: string;
 }
 
-type Candidate = { ref: TargetRef; target: Target };
+type Candidate = { ref: TargetRef; target: Target; index: number };
 type TimerKind = "ttft" | "no-progress";
 type NextResult =
   | { kind: "next"; result: IteratorResult<StreamChunk> }
@@ -91,6 +93,15 @@ function asFailure(value: unknown, fallbackParams: string[]): FailureInput {
   if (typeof record.body === "string") input.body = record.body;
   if (record.timer === "ttft" || record.timer === "no-progress") input.timer = record.timer;
   return input;
+}
+
+function failureDetails(input: FailureInput): FailoverErrorDetails | undefined {
+  const details: FailoverErrorDetails = {
+    ...(input.status === undefined ? {} : { status: input.status }),
+    ...(input.code === undefined ? {} : { code: input.code }),
+    ...(input.body === undefined ? {} : { body: redactFailureBody(input.body) }),
+  };
+  return Object.keys(details).length === 0 ? undefined : details;
 }
 
 function nextResult(iterator: AsyncIterator<StreamChunk>): Promise<NextResult> {
@@ -212,7 +223,7 @@ function candidatesFor(
   states: Record<TargetRef, TargetState>,
   now: number,
 ): Candidate[] {
-  const all = chain.targets.map((target) => ({ target, ref: targetRef(target) }));
+  const all = chain.targets.map((target, index) => ({ target, ref: targetRef(target), index }));
   const normal = all.filter(({ ref }) => !isExcluded(states[ref], now));
   return normal.length > 0 ? normal : all.filter(({ ref }) => !states[ref]?.manualRecovery);
 }
@@ -225,8 +236,10 @@ async function recordFailure(
   persistent: boolean,
   requestSeq: number,
   startedAt: number,
+  input?: FailureInput,
 ): Promise<void> {
   const now = deps.clock.now();
+  const details = input === undefined ? undefined : failureDetails(input);
   await deps.state.update((targets) => {
     const current = targets[ref] ?? reset();
     targets[ref] = persistent
@@ -241,6 +254,7 @@ async function recordFailure(
     to,
     reason,
     elapsedMs: Math.max(0, now - startedAt),
+    ...(details === undefined ? {} : { error: details }),
   });
 }
 
@@ -287,9 +301,14 @@ export async function* runChain(
     if (candidate === undefined) continue;
     const targetSettings = resolveTargetSettings(candidate.target, settings);
     const stripped: string[] = [];
-    const nextRef = candidates[index + 1]?.ref ?? null;
-    const record = (reason: FailoverReason, persistent = false, to = nextRef) =>
-      recordFailure(deps, candidate.ref, to, reason, persistent, requestSeq, startedAt);
+    const nextTarget = chain.targets[candidate.index + 1];
+    const nextRef = nextTarget === undefined ? null : targetRef(nextTarget);
+    const record = (
+      reason: FailoverReason,
+      persistent = false,
+      to = nextRef,
+      input?: FailureInput,
+    ) => recordFailure(deps, candidate.ref, to, reason, persistent, requestSeq, startedAt, input);
     let retries = 0;
 
     while (true) {
@@ -328,7 +347,7 @@ export async function* runChain(
       if (outcome.kind === "cancelled") throw abortError();
       if (outcome.kind === "success") {
         if (outcome.pendingCooldown) {
-          await record("ttft-timeout", false, null);
+          await record("ttft-timeout");
         } else {
           await deps.state.update((targets) => {
             targets[candidate.ref] = applySuccess(targets[candidate.ref] ?? reset());
@@ -357,7 +376,7 @@ export async function* runChain(
         break;
       }
       if (classification.cls === "persistent") {
-        await record(classification.reason, true);
+        await record(classification.reason, true, nextRef, outcome.input);
         break;
       }
       if (
@@ -372,7 +391,7 @@ export async function* runChain(
         retries++;
         continue;
       }
-      await record(classification.reason);
+      await record(classification.reason, false, nextRef, outcome.input);
       break;
     }
   }

@@ -26,6 +26,16 @@ export function renameProvider(models: ModelsJson, id: string, name: string): Mo
   return next;
 }
 
+export function renameProviderId(models: ModelsJson, oldId: string, newId: string): ModelsJson {
+  const next = clone(models);
+  if (oldId === newId || next.providers[oldId] === undefined || next.providers[newId] !== undefined)
+    return next;
+  next.providers = Object.fromEntries(
+    Object.entries(next.providers).map(([id, node]) => [id === oldId ? newId : id, node]),
+  );
+  return next;
+}
+
 export function deleteProvider(models: ModelsJson, id: string): ModelsJson {
   const next = clone(models);
   delete next.providers[id];

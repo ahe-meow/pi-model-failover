@@ -1,7 +1,8 @@
-import { resolveTargetSettings, virtualModelNode } from "../../../domain/chains.js";
-import type { Chain, ModelsJson, Settings, TargetRef, TargetState } from "../../../domain/types.js";
+import { virtualModelNode } from "../../../domain/chains.js";
+import type { Chain, ModelsJson, TargetRef, TargetState } from "../../../domain/types.js";
 import { S } from "../../../strings.js";
 import type { Row } from "../../primitives/scrollList.js";
+import type { TableColumn } from "../../primitives/table.js";
 import { filterRows } from "../../primitives/textFilter.js";
 import { theme } from "../../primitives/theme.js";
 import { chainStatus, firstTargetRef, targetRef, targetStatus } from "./support.js";
@@ -43,10 +44,18 @@ export function filteredChainRows(
   return { rows: filtered.map(({ row }) => row), chains: filtered.map(({ item }) => item) };
 }
 
+const TARGET_MIN_WIDTH = 24;
+
+export const targetColumns = (): TableColumn[] => [
+  { header: S.chains.targetLabels.index },
+  { header: S.chains.targetLabels.target, minWidth: TARGET_MIN_WIDTH },
+  { header: S.chains.targetLabels.multiplier },
+  { header: S.chains.targetLabels.status },
+];
+
 export function filteredTargetRows(
   chain: Chain,
   models: ModelsJson,
-  settings: Settings,
   states: Record<TargetRef, TargetState>,
   now: number,
   query: string,
@@ -54,18 +63,9 @@ export function filteredTargetRows(
   const filtered = filterRows(
     chain.targets,
     (target, index) => {
-      const resolved = resolveTargetSettings(target, settings);
       const multiplier = models.providers[target.provider]?.piModelFailover?.costMultiplier ?? 1;
       const status = theme.status(targetStatus(states[targetRef(target)], now));
-      const cells = [
-        String(index + 1),
-        targetRef(target),
-        `${multiplier.toFixed(2)}x`,
-        resolved.errorHandlingMode,
-        `r${resolved.maxRetries}`,
-        `ttft${resolved.ttftTimeoutSeconds}/${resolved.ttftAction}`,
-        status,
-      ];
+      const cells = [String(index + 1), targetRef(target), `${multiplier.toFixed(2)}x`, status];
       return { text: cells.join("  "), cells };
     },
     query,

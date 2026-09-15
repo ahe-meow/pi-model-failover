@@ -4,8 +4,7 @@ export const S = {
   memoryMode: "[memory mode]",
   needsTui: "pi-model-failover needs the TUI",
   commandDescription: "Manage providers, failover chains, history",
-  abortWarning:
-    "Aborting still bills the prompt tokens of the aborted request on most providers/relays.",
+  abortWarning: `Aborting still bills the prompt tokens of the aborted request on most providers/relays.`,
   modelsJsonInvalid: "models.json is invalid",
   sharedState: {
     invalid: "state.json is invalid; using memory mode",
@@ -68,6 +67,7 @@ export const S = {
     driftMarker: "~",
     keyGroupForm: {
       title: "Batch add API keys",
+      keyEntryTitle: "Enter API keys",
       labels: {
         prefix: "Prefix",
         baseUrl: "Base URL",
@@ -101,6 +101,7 @@ export const S = {
       renameTitle: "Rename provider",
       multiplierTitle: "Edit multiplier",
       labels: {
+        id: "ID",
         name: "Name",
         baseUrl: "Base URL",
         api: "API type",
@@ -110,6 +111,8 @@ export const S = {
         multiplier: "Multiplier",
       },
       invalidName: "Name is required and must not contain whitespace or slash",
+      invalidId: "ID is required and must not contain whitespace or slash",
+      duplicateId: "ID is already in use",
       invalidUrl: "Base URL must be a valid http or https URL",
       invalidApi: "Select a supported API type",
       invalidHeaders: "Headers must use Name: value lines",
@@ -182,7 +185,12 @@ export const S = {
   },
   chains: {
     listHeader: "Chain  Targets  First target  Status",
-    targetHeader: "#  Target  Mult  Mode  Retries  TTFT  Status",
+    targetLabels: {
+      index: "#",
+      target: "Target",
+      multiplier: "Mult",
+      status: "Status",
+    },
     detailHeader: (id: string, virtualId: string, details: string) =>
       `${id} → ${virtualId}  ${details}`,
     virtualId: (id: string) => `failover/${id}`,
@@ -230,10 +238,12 @@ export const S = {
         },
         reasoningEffort: {
           inherit: "inherit",
-          minimal: "minimal",
+          off: "off",
           low: "low",
           medium: "medium",
           high: "high",
+          xhigh: "xhigh",
+          max: "max",
         },
         ttftAction: {
           cooldownOnly: "Cooldown only",
@@ -263,17 +273,13 @@ export const S = {
     inputTitle: (label: string) => `Input ${label}`,
     inputPrompt: "Value",
     cursor: "▌",
-    inputHint: "Enter save · Esc cancel",
+    inputHint: "Enter commit · Ctrl+S save · Esc cancel",
   },
   filter: { inputTitle: "Filter list", inputHint: "Enter apply · Esc cancel" },
   confirm: "Confirm",
   cancel: "Cancel",
   hints: {
-    global: [
-      ["Tab", "next tab"],
-      ["?", "help"],
-      ["q", "quit"],
-    ] as Array<[string, string]>,
+    global: Object.entries({ Tab: "next tab", "?": "help", q: "quit" }),
     modelManager: {
       list: [
         ["Enter", "open"],
@@ -341,6 +347,7 @@ export const S = {
         ["i", "same-model import"],
         ["d", "remove target"],
         ["J/K", "move target"],
+        ["s", "sort by multiplier"],
         ["r", "reset target"],
         ["/", "filter"],
         ["Esc", "back"],
@@ -376,20 +383,11 @@ export const S = {
         ["c", "clear filter"],
       ] as Array<[string, string]>,
     },
-    settings: [
-      ["↑↓", "field"],
-      ["Enter", "edit or save"],
-      ["?", "help"],
-      ["q", "quit"],
-    ] as Array<[string, string]>,
-    form: [
-      ["Enter", "edit / save"],
-      ["↑↓", "move/select"],
-      ["Tab", "next field"],
-      ["Shift+Tab", "prev"],
-      ["Space", "toggle"],
-      ["Esc", "cancel"],
-    ] as Array<[string, string]>,
+    // biome-ignore format: keep settings hint entries compact
+    settings: [["↑↓", "field"], ["Enter", "edit"], ["Ctrl+S", "save"], ["?", "help"], ["q", "quit"]] as Array<[string, string]>,
+    // biome-ignore format: keep form hint entries compact
+    form: [["Enter", "edit / commit"], ["Ctrl+S", "save"], ["↑↓", "move/select"], ["Tab", "next field"], ["Shift+Tab", "prev"], ["Space", "toggle"], ["Esc", "cancel"]] as Array<[string, string]>,
+    keyEntry: Object.entries({ Enter: "commit row", "Ctrl+S": "save and return", Esc: "cancel" }),
     confirm: [
       ["Tab", "choose confirm or cancel"],
       ["Enter", "confirm action"],

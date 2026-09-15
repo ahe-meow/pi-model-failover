@@ -31,7 +31,7 @@ describe("SettingsTab", () => {
     for (let i = 0; i < 5; i++) t.handleInput(Key.down);
     await t.handleInput(Key.enter);
     expect(config.get().settings.listRows).toBe(7);
-    await t.handleInput(Key.enter);
+    await t.handleInput(Key.ctrl("s"));
     expect(config.get().settings.listRows).toBe(20);
   });
 

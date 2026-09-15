@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { redactProvider, redactSecret } from "../../src/domain/redact.js";
+import { redactFailureBody, redactProvider, redactSecret } from "../../src/domain/redact.js";
 
 const fakeSecret = (suffix: string): string => ["s", "k", "-", suffix].join("");
 function expectedRedaction(value: string): string {
@@ -22,6 +22,24 @@ describe("redactSecret (C22)", () => {
   it("env references pass through", () => {
     expect(redactSecret("$OPENAI_KEY")).toBe("$OPENAI_KEY");
     expect(redactSecret(`\${OPENAI_KEY}`)).toBe(`\${OPENAI_KEY}`);
+  });
+});
+
+describe("redactFailureBody", () => {
+  it.each([
+    ["api_key=abcdefgh", "api_key=abc…efgh"],
+    ['"api_key": "abcdefgh"', '"api_key": "abc…efgh"'],
+    ["Authorization: Bearer abcdefgh", "Authorization: Bearer abc…efgh"],
+    ["token: sk-1234567890abcd", "token: sk-…abcd"],
+    ["invalid API key for sk-1234567890abcd", "invalid API key for sk-…abcd"],
+  ])("redacts %s", (input, expected) => {
+    expect(redactFailureBody(input)).toBe(expected);
+  });
+
+  it("leaves an ordinary error message untouched", () => {
+    expect(redactFailureBody("Unknown parameter: temperature")).toBe(
+      "Unknown parameter: temperature",
+    );
   });
 });
 

@@ -1,6 +1,12 @@
 import type { WriteQueue } from "../config/writeQueue.js";
 import type { FileSystem } from "../domain/ports.js";
-import type { ApiType, ModelNode, ModelsJson, ProviderNode } from "../domain/types.js";
+import {
+  type ApiType,
+  type ModelNode,
+  type ModelsJson,
+  normalizeThinkingLevelMap,
+  type ProviderNode,
+} from "../domain/types.js";
 import { S } from "../strings.js";
 
 const API_TYPES: readonly ApiType[] = [
@@ -131,13 +137,19 @@ function zeroCost(): NonNullable<ModelNode["cost"]> {
 
 function normalizeModel(value: ModelNode): ModelNode {
   const { name, api, baseUrl, thinkingLevelMap, headers, compat, ...rest } = value;
+  const normalizedThinkingLevelMap = normalizeThinkingLevelMap(
+    value.reasoning === true,
+    isThinkingLevelMap(thinkingLevelMap) ? thinkingLevelMap : undefined,
+  );
   return {
     ...rest,
     ...(typeof name === "string" ? { name } : {}),
     ...(isApiType(api) ? { api } : {}),
     ...(typeof baseUrl === "string" ? { baseUrl } : {}),
     reasoning: value.reasoning === true,
-    ...(isThinkingLevelMap(thinkingLevelMap) ? { thinkingLevelMap } : {}),
+    ...(normalizedThinkingLevelMap === undefined
+      ? {}
+      : { thinkingLevelMap: normalizedThinkingLevelMap }),
     input: isInputList(value.input) ? [...value.input] : ["text"],
     contextWindow: isFiniteNumber(value.contextWindow) ? value.contextWindow : 128000,
     maxTokens: isFiniteNumber(value.maxTokens) ? value.maxTokens : 16384,

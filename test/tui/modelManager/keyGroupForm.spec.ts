@@ -78,14 +78,7 @@ async function input(target: InputTarget, data: string): Promise<void> {
 }
 
 async function setFormValues(target: InputTarget, values: FormValues): Promise<void> {
-  const fields: Array<keyof FormValues> = [
-    "prefix",
-    "baseUrl",
-    "api",
-    "headers",
-    "multiplier",
-    "keys",
-  ];
+  const fields = ["prefix", "baseUrl", "api", "headers", "multiplier"] as const;
   for (const [index, field] of fields.entries()) {
     if (field === "api") {
       const option = API_TYPES.indexOf(values.api);
@@ -96,12 +89,36 @@ async function setFormValues(target: InputTarget, values: FormValues): Promise<v
     }
     if (index < fields.length - 1) await input(target, Key.down);
   }
+  await input(target, Key.down);
+  await input(target, Key.enter);
+  await input(target, values.keys);
+  await input(target, Key.ctrl("s"));
 }
 
 async function submit(target: InputTarget): Promise<void> {
+  await input(target, Key.ctrl("s"));
+}
+
+async function setNonKeyFormValues(
+  target: InputTarget,
+  values: FormValues = validValues,
+): Promise<void> {
+  const fields = ["prefix", "baseUrl", "api", "headers", "multiplier"] as const;
+  for (const [index, field] of fields.entries()) {
+    if (field === "api") {
+      const option = API_TYPES.indexOf(values.api);
+      for (let step = 0; step < option; step++) await input(target, Key.right);
+    } else {
+      if (field === "multiplier") await input(target, Key.backspace);
+      for (const character of values[field]) await input(target, character);
+    }
+    if (index < fields.length - 1) await input(target, Key.down);
+  }
+  await input(target, Key.down);
+}
+
+async function openKeyEntry(target: InputTarget): Promise<void> {
   await input(target, Key.enter);
-  const editable = target as InputTarget & { isEditing?: () => boolean };
-  if (editable.isEditing?.()) await input(target, Key.enter);
 }
 
 describe("KeyGroupForm", () => {
@@ -222,6 +239,122 @@ describe("KeyGroupForm", () => {
     expect(rendered).not.toContain("sk-rendered-111");
     expect(rendered).toContain(redactSecret("sk-rendered-000"));
     expect(rendered).toContain(redactSecret("sk-rendered-111"));
+  });
+
+  it("shows a distinct key-entry title and dedicated hints while active", async () => {
+    const { deps } = await makeDeps({ providers: {} });
+    const form = new KeyGroupForm({ ...deps, onDone: vi.fn() });
+
+    await setNonKeyFormValues(form);
+    await openKeyEntry(form);
+
+    const rendered = form.render(120, 40).join("\n");
+    expect(rendered).toContain("Enter API keys");
+    expect(rendered).not.toContain(S.modelManager.keyGroupForm.title);
+    expect(form.hints()).toEqual([
+      ["Enter", "commit row"],
+      ["Ctrl+S", "save and return"],
+      ["Esc", "cancel"],
+    ]);
+  });
+
+  it("shows keys only while the dedicated key-entry interface is active", async () => {
+    const { deps } = await makeDeps({ providers: {} });
+    const form = new KeyGroupForm({ ...deps, onDone: vi.fn() });
+
+    await setNonKeyFormValues(form);
+    await openKeyEntry(form);
+    await input(form, "sk-visible");
+
+    const active = form.render(120, 40).join("\n");
+    expect(active).toContain("sk-visible");
+
+    await input(form, "\u0013");
+    const returned = form.render(120, 40).join("\n");
+    expect(returned).not.toContain("sk-visible");
+    expect(returned).toContain(redactSecret("sk-visible"));
+  });
+
+  it("commits each non-empty row and persists the saved list with per-line multipliers", async () => {
+    const { deps } = await makeDeps({ providers: {} });
+    const form = new KeyGroupForm({ ...deps, onDone: vi.fn() });
+
+    await setNonKeyFormValues(form);
+    await openKeyEntry(form);
+    for (const character of "sk-first 0.25") await input(form, character);
+    await input(form, Key.enter);
+    for (const character of "sk-second") await input(form, character);
+
+    const active = form.render(120, 40).join("\n");
+    expect(active).toContain("sk-first 0.25");
+    expect(active).toContain("sk-second");
+
+    await input(form, Key.ctrl("s"));
+    await input(form, Key.ctrl("s"));
+
+    const models = await deps.modelsFile.read();
+    expect(models.providers["relay-1"]?.apiKey).toBe("sk-first");
+
+    expect(models.providers["relay-1"]?.piModelFailover?.costMultiplier).toBe(0.25);
+    expect(models.providers["relay-2"]?.apiKey).toBe("sk-second");
+    expect(models.providers["relay-2"]?.piModelFailover?.costMultiplier).toBe(0.1);
+  });
+
+  it("keeps saved parent key values when a later child edit is canceled", async () => {
+    const { deps } = await makeDeps({ providers: {} });
+    const form = new KeyGroupForm({ ...deps, onDone: vi.fn() });
+
+    await setNonKeyFormValues(form);
+    await openKeyEntry(form);
+    await input(form, "sk-original");
+    await input(form, "\u0013");
+
+    await input(form, Key.up);
+    await input(form, Key.down);
+    await input(form, Key.enter);
+    await input(form, "sk-new");
+    await input(form, Key.escape);
+
+    const returned = form.render(120, 40).join("\n");
+    expect(returned).toContain(redactSecret("sk-original"));
+    expect(returned).not.toContain("sk-new");
+    expect(returned).toContain("relay");
+    expect(returned).toContain("https://relay.example/v1");
+    expect(returned).toContain("X-Team: blue");
+  });
+
+  it("cancels key-entry edits without returning raw keys to the batch form", async () => {
+    const { deps } = await makeDeps({ providers: {} });
+    const modelsUpdate = vi.spyOn(deps.modelsFile, "update");
+    const form = new KeyGroupForm({ ...deps, onDone: vi.fn() });
+
+    await setNonKeyFormValues(form);
+    await openKeyEntry(form);
+    await input(form, "sk-cancel");
+    expect(form.render(120, 40).join("\n")).toContain("sk-cancel");
+
+    await input(form, Key.escape);
+
+    const returned = form.render(120, 40).join("\n");
+    expect(returned).not.toContain("sk-cancel");
+    expect(modelsUpdate).not.toHaveBeenCalled();
+  });
+
+  it("submits the saved batch through the existing persistence flow", async () => {
+    const { deps, fs } = await makeDeps({ providers: {} });
+    const form = new KeyGroupForm({ ...deps, onDone: vi.fn() });
+
+    await setNonKeyFormValues(form);
+    await openKeyEntry(form);
+    for (const character of "sk-persisted") await input(form, character);
+    await input(form, Key.enter);
+    await input(form, Key.ctrl("s"));
+    await input(form, Key.ctrl("s"));
+
+    expect(JSON.parse(fs.files.get(MODELS_PATH) ?? "null").providers["relay-1"].apiKey).toBe(
+      "sk-persisted",
+    );
+    expect(deps.config.get().keyGroups).toHaveLength(1);
   });
 
   it("opens and cancels the form from the provider list", async () => {

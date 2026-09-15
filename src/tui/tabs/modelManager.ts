@@ -240,9 +240,12 @@ export class ModelManagerTab implements TabComponent {
       initialModels: this.models,
       ...(providerId === undefined ? {} : { providerId }),
       mode,
+      // biome-ignore format: keep the callback wiring compact
+      onProviderIdChange: (id) => { this.selectedProviderId = id; },
       onDone: (models) => this.finishForm(models, back),
       onCancel: () => this.closeForm(back),
     });
+    if (mode === "multiplier") this.form.handleInput(Key.enter);
     this.screen = "form";
   }
   private openModelForm(): void {
@@ -260,11 +263,8 @@ export class ModelManagerTab implements TabComponent {
     });
     this.screen = "form";
   }
-  private closeForm(back: Screen): void {
-    this.form = undefined;
-    this.formBack = undefined;
-    this.screen = back;
-  }
+  // biome-ignore format: keep the state handoff compact
+  private closeForm(back: Screen): void { this.form = undefined; this.formBack = undefined; this.screen = back; }
   private finishForm(models: ModelsJson, back: Screen): void {
     this.models = structuredClone(models);
     this.closeForm(back);
