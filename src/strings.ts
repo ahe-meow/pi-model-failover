@@ -4,16 +4,16 @@ export const S = {
   memoryMode: "[memory mode]",
   needsTui: "pi-model-failover needs the TUI",
   commandDescription: "Manage providers, failover chains, history",
+  // biome-ignore format: keep model switch strings together
+  modelSwitch: { selected: (ref: string) => `Using ${ref}`, unavailable: "Selected model is not available", authMissing: (ref: string) => `No configured authentication for ${ref}`, failed: "Could not switch model" },
   abortWarning: `Aborting still bills the prompt tokens of the aborted request on most providers/relays.`,
   modelsJsonInvalid: "models.json is invalid",
   sharedState: {
     invalid: "state.json is invalid; using memory mode",
     newerVersion: "state.json uses a newer version; using memory mode",
   },
-  registrar: {
-    builtinSkipped: (id: string) => `Skipping built-in provider ${id}`,
-    registrationFailed: (id: string) => `Failed to register provider ${id}`,
-  },
+  // biome-ignore format: keep registrar strings together
+  registrar: { builtinSkipped: (id: string) => `Skipping built-in provider ${id}`, registrationFailed: (id: string) => `Failed to register provider ${id}` },
   settingsHeader: "Global settings (targets without a value use these)",
   settings: {
     labels: {
@@ -48,9 +48,8 @@ export const S = {
     unknownTime: "unknown time",
     refreshFailed: "Could not refresh history",
     resetFailed: "Could not reset target",
-    filter: {
-      title: (kind: string) => (kind === "chain" ? "Filter by Chain" : "Filter by provider"),
-    },
+    // biome-ignore format: keep history filter strings together
+    filter: { title: (kind: string) => (kind === "chain" ? "Filter by Chain" : "Filter by provider") },
   },
   modelManager: {
     providerHeader: "Provider  API  Models  Mult  Owner",
@@ -296,6 +295,7 @@ export const S = {
       ] as Array<[string, string]>,
       detail: [
         ["Enter", "edit model"],
+        ["p", "use model"],
         ["a", "add from catalog"],
         ["d", "remove model"],
         ["s", "sync attributes"],
@@ -332,6 +332,7 @@ export const S = {
     chains: {
       list: [
         ["Enter", "open"],
+        ["p", "use failover Chain"],
         ["a", "new chain"],
         ["d", "delete"],
         ["r", "rename"],
@@ -343,6 +344,7 @@ export const S = {
       ] as Array<[string, string]>,
       detail: [
         ["Enter", "target settings"],
+        ["p", "use failover Chain"],
         ["a", "add target"],
         ["i", "same-model import"],
         ["d", "remove target"],

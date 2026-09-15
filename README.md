@@ -40,8 +40,9 @@ Typical flow:
 
 1. Add providers in **Model Manager** or paste a key group.
 2. Create a Chain, choose its model, and order the Targets with `J`/`K`.
-3. Select `failover/<chain-id>` from Pi's normal model picker.
-4. Inspect failures in **History**; use `r` to reset a recovered Target after fixing its credentials.
+3. In Model Manager detail, press `p` to use the highlighted provider model; in Chains list or detail, press `p` to use that Chain.
+4. Select `failover/<chain-id>` from Pi's normal model picker.
+5. Inspect failures in **History**; use `r` to reset a recovered Target after fixing its credentials.
 
 The Chain detail view lists each Target's number, `provider/modelId`, cost multiplier, and current status (`ok`, `cool`, or `manual`); retry mode, TTFT settings, and per-target `reasoningEffort` live in the Target settings form opened with `Enter`.
 

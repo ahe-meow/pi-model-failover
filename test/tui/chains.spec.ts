@@ -266,6 +266,25 @@ describe("ChainsTab", () => {
     expect(tab.helpTitle()).toBe(S.tabs[1]);
   });
 
+  it("uses the selected or current Chain with p", async () => {
+    const { deps } = await makeHarness([chain(), chain("review")]);
+    const useModel = vi.fn(async () => {});
+    Object.assign(deps, { useModel });
+    const tab = createTab(deps);
+    await vi.waitFor(() => expect(deps.state.read).toHaveBeenCalled());
+
+    await tab.handleInput("p");
+    expect(useModel).toHaveBeenCalledWith("failover", "coding");
+
+    await tab.handleInput(Key.down);
+    await tab.handleInput("p");
+    expect(useModel).toHaveBeenLastCalledWith("failover", "review");
+
+    await tab.handleInput(Key.enter);
+    await tab.handleInput("p");
+    expect(useModel).toHaveBeenLastCalledWith("failover", "review");
+  });
+
   it("adds a chain through the validated id/name form", async () => {
     const { deps, config, registrar } = await makeHarness([]);
     const tab = createTab(deps);

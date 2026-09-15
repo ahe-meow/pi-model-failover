@@ -4,6 +4,7 @@ import type { Fetch } from "../../domain/ports.js";
 import { deleteProvider, removeModel } from "../../domain/providers.js";
 import type { ModelNode, ModelsJson, ProviderNode } from "../../domain/types.js";
 import { S } from "../../strings.js";
+import { selectModel } from "../modelSelection.js";
 import { Confirm } from "../primitives/confirm.js";
 import { ScrollList } from "../primitives/scrollList.js";
 import { tableColumns } from "../primitives/table.js";
@@ -104,11 +105,8 @@ export class ModelManagerTab implements TabComponent {
     else if (isKey(data, Key.escape) && this.filters.provider.clear()) this.setProviderRows();
     else move(this.providerList, data);
   }
-  isEditing = (): boolean =>
-    this.filters.isEditing(
-      this.screen,
-      Boolean(this.form?.isEditing?.() || this.catalogScreen?.isEditing?.()),
-    );
+  // biome-ignore format: keep the editing predicate compact
+  isEditing = (): boolean => this.filters.isEditing(this.screen, Boolean(this.form?.isEditing?.() || this.catalogScreen?.isEditing?.()));
   hints(): Array<[string, string]> {
     if (this.filters.active(this.screen)?.isEditing) return S.hints.form;
     if (this.confirm !== undefined) return S.hints.confirm;
@@ -159,12 +157,15 @@ export class ModelManagerTab implements TabComponent {
     else if (data === "d") this.openRemoveModels();
     else if (data === "s") this.openSyncModels();
     else if (data === "e") this.openProviderForm(PROVIDER_MODES[0]);
+    else if (data === "p") return this.useSelectedModel();
     else if (isKey(data, Key.space)) {
       this.modelList.toggleMark();
       syncMarks(this.visibleModels, this.modelList, this.markedModelIds);
     } else if (isKey(data, Key.enter)) this.openModelForm();
     else move(this.modelList, data);
   }
+  // biome-ignore format: keep selection forwarding compact
+  private useSelectedModel = (): Promise<void> | undefined => selectModel(this.deps.useModel, this.selectedProviderId, this.visibleModels[this.modelList.selected]?.id);
   private setProviderRows(): void {
     const result = filteredProviderRows(this.models, this.filters.provider.query);
     this.visibleProviders = result.providers;
@@ -342,9 +343,8 @@ export class ModelManagerTab implements TabComponent {
         S.modelManager.actions.deleteProviderCleanup,
       ],
       async () => {
-        const next = await this.deps.modelsFile.update((models) =>
-          deleteProvider(models, entry.id),
-        );
+        // biome-ignore format: keep deferred delete update compact
+        const next = await this.deps.modelsFile.update((models) => deleteProvider(models, entry.id), { deferFailoverSync: true });
         await this.deps.afterProviderDelete?.(entry.id, next);
         this.finishModels(next, "list");
       },

@@ -155,6 +155,43 @@ describe("extension entry", () => {
     expect(done).toHaveBeenCalledWith(undefined);
   });
 
+  it("switches Pi to the Model Manager selection with p", async () => {
+    const pi = new FakePi();
+    const setModel = vi.fn(async () => true);
+    Object.assign(pi, { setModel });
+    const { factory } = await makeFactory({
+      pi,
+      models: { providers: { relay: ownedProvider("relay", [modelNode]) } },
+    });
+    await factory(pi as never);
+
+    let app: { handleInput(data: string): void } | undefined;
+    const notify = vi.fn();
+    const custom = vi.fn(
+      async (
+        makeComponent: (
+          tui: unknown,
+          theme: unknown,
+          keybindings: unknown,
+          done: (result: unknown) => void,
+        ) => unknown,
+      ) => {
+        app = makeComponent({}, {}, {}, () => {}) as { handleInput(data: string): void };
+      },
+    );
+    await pi.commands.get("failover")?.("", {
+      mode: "tui",
+      modelRegistry: { find: () => ({ provider: "relay", id: "m" }) },
+      thinkingLevel: "medium",
+      ui: { notify, custom },
+    });
+
+    app?.handleInput(Key.enter);
+    app?.handleInput("p");
+    await vi.waitFor(() => expect(setModel).toHaveBeenCalledWith({ provider: "relay", id: "m" }));
+    expect(notify).toHaveBeenCalledWith(S.modelSwitch.selected("relay/m"), "warning");
+  });
+
   it("preserves a function-valued ProviderConfig stream callback", () => {
     const streamSimple = vi.fn();
     const config = {
@@ -439,9 +476,18 @@ describe("extension entry", () => {
     expect(pi.providers.has("later")).toBe(true);
     expect(pi.providers.has("builtin")).toBe(false);
   });
-
   it("renames a provider id across models.json, Chains, and cooldown state", async () => {
     const pi = new FakePi();
+    const registerProvider = vi.spyOn(pi, "registerProvider");
+    const failoverUnregisters: string[] = [];
+    const unregisterProvider = pi.unregisterProvider.bind(pi);
+    pi.unregisterProvider = (id) => {
+      if (id === "failover") {
+        failoverUnregisters.push(id);
+        throw new Error(S.appTitle);
+      }
+      unregisterProvider(id);
+    };
     const { factory, modelsFile, agentDir } = await makeFactory({
       pi,
       models: { providers: { relay: ownedProvider("relay", [modelNode]) } },
@@ -546,6 +592,8 @@ describe("extension entry", () => {
         models: [{ id: "coding" }],
       });
     });
+    expect(failoverUnregisters).toEqual([]);
+    expect(registerProvider.mock.calls.filter(([id]) => id === "renamed")).toHaveLength(1);
     expect((await modelsFile.read()).providers.relay).toBeUndefined();
     expect(await nodeFs.readText(historyPath)).toBe(`${historicalRow}\n`);
   });

@@ -9,6 +9,7 @@ export interface ChainsDeps {
   state: SharedState;
   history: HistoryLog;
   registrar: { syncFailover(chains: Chain[], models: ModelsJson): void };
+  useModel?: (providerId: string, modelId: string) => Promise<void>;
   notify: (message: string) => void;
   now: () => string;
   sessionId: string;

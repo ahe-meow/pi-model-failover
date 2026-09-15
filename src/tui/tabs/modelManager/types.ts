@@ -4,11 +4,18 @@ import type { ModelsJson } from "../../../domain/types.js";
 
 export const PROVIDER_MODES = ["full", "rename", "multiplier"] as const;
 
+export interface ModelsFileUpdateOptions {
+  deferFailoverSync?: boolean;
+}
+
 export interface ModelManagerDeps {
   config: ConfigStore;
   modelsFile: {
     read(): Promise<ModelsJson>;
-    update(fn: (models: ModelsJson) => ModelsJson): Promise<ModelsJson>;
+    update(
+      fn: (models: ModelsJson) => ModelsJson,
+      options?: ModelsFileUpdateOptions,
+    ): Promise<ModelsJson>;
   };
   initialModels: ModelsJson;
   registrar: { syncOwned(models: ModelsJson): void };
@@ -17,6 +24,7 @@ export interface ModelManagerDeps {
   createKeyGroupId: () => string;
   fetch?: Fetch;
   runtimeFactory?: () => Promise<{ getModels(): unknown[] }>;
+  useModel?: (providerId: string, modelId: string) => Promise<void>;
   afterProviderDelete?: (providerId: string, models: ModelsJson) => Promise<void>;
   afterProviderRename?: (
     previousId: string,

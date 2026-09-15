@@ -3,6 +3,7 @@ import * as ops from "../../domain/chains.js";
 import { reset } from "../../domain/cooldown.js";
 import type { Chain, ModelsJson, Target, TargetRef, TargetState } from "../../domain/types.js";
 import { S } from "../../strings.js";
+import { selectChain } from "../modelSelection.js";
 import { Confirm } from "../primitives/confirm.js";
 import type { Form } from "../primitives/form.js";
 import { ScrollList } from "../primitives/scrollList.js";
@@ -88,13 +89,12 @@ export class ChainsTab implements TabComponent {
     else if (data === "r") {
       this.openChainForm("rename");
     } else if (data === "R") this.openResetChain();
+    else if (data === "p") return selectChain(this.deps.useModel, this.selectedListChain()?.id);
     else if (isKey(data, Key.enter)) this.openSelectedChain();
     else move(this.chainList, data);
   }
-  isEditing = (): boolean =>
-    Boolean(
-      this.activeFilter()?.isEditing || this.form?.isEditing() || this.subScreen?.isEditing?.(),
-    );
+  // biome-ignore format: keep the editing predicate compact
+  isEditing = (): boolean => Boolean(this.activeFilter()?.isEditing || this.form?.isEditing() || this.subScreen?.isEditing?.());
   hints(): Array<[string, string]> {
     if (this.subScreen !== undefined) return this.subScreen.hints();
     if (this.confirm !== undefined) return S.hints.confirm;
@@ -140,6 +140,7 @@ export class ChainsTab implements TabComponent {
     else if (data === "i") this.openTargetPicker(false);
     else if (data === "d") this.openRemoveTarget();
     else if (data === "r") this.openResetTarget();
+    else if (data === "p") return selectChain(this.deps.useModel, chain.id);
     else if (data === "s") await this.sortTargets();
     else if (data.toLowerCase() === "j") await this.moveSelectedTarget(1);
     else if (isKey(data, Key.shift("j"))) await this.moveSelectedTarget(1);

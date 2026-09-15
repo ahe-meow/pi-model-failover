@@ -115,6 +115,17 @@ describe("ModelManagerTab provider list and detail", () => {
     );
   });
 
+  it("uses the highlighted Provider Model with p", async () => {
+    const deps = await makeDeps(models);
+    const useModel = vi.fn(async () => {});
+    const tab = new ModelManagerTab(Object.assign(deps, { useModel }) as ModelManagerDeps);
+
+    await tab.handleInput(Key.enter);
+    await tab.handleInput("p");
+
+    expect(useModel).toHaveBeenCalledWith("relay", "m");
+  });
+
   it("filters the provider list with a draft that cancels and an applied query that clears", async () => {
     const source = structuredClone(models);
     const relay = copyRelay(source);

@@ -28,6 +28,7 @@ import { normalizeThinkingLevelMap } from "./domain/types.js";
 import { HistoryLog } from "./history/historyLog.js";
 import { S } from "./strings.js";
 import { type AppDeps, createApp } from "./tui/app.js";
+import type { ModelsFileUpdateOptions } from "./tui/tabs/modelManager/types.js";
 
 function hasStreamSimple(value: unknown): value is ProviderConfig {
   return (
@@ -179,10 +180,10 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   registrar.syncFailover(config.get().chains, models);
   const modelManagerModelsFile: AppDeps["modelsFile"] = {
     read: () => modelsFile.read(),
-    update: async (update) => {
+    update: async (update, options?: ModelsFileUpdateOptions) => {
       const next = await modelsFile.update(update);
       models = structuredClone(next);
-      registrar.syncFailover(config.get().chains, next);
+      if (!options?.deferFailoverSync) registrar.syncFailover(config.get().chains, next);
       return next;
     },
   };
@@ -207,6 +208,21 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     return targets.length;
   };
 
+  const useModel = async (providerId: string, modelId: string): Promise<void> => {
+    const ref = `${providerId}/${modelId}`;
+    const model = currentRegistry?.find(providerId, modelId);
+    if (model === undefined) {
+      latestNotify?.(S.modelSwitch.unavailable);
+      return;
+    }
+    try {
+      const applied = await pi.setModel(model);
+      latestNotify?.(applied ? S.modelSwitch.selected(ref) : S.modelSwitch.authMissing(ref));
+    } catch {
+      latestNotify?.(S.modelSwitch.failed);
+    }
+  };
+
   pi.registerCommand("failover", {
     description: S.commandDescription,
     handler: async (_args, ctx) => {
@@ -228,6 +244,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
           history,
           registrar,
           notify: (message) => latestNotify?.(message),
+          useModel,
           now,
           sessionId,
           createChainId: () => `chain-${crypto.randomUUID().slice(0, 8)}`,

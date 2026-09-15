@@ -172,14 +172,17 @@ export class ProviderForm extends FormView {
     const moved = previousId !== undefined && previousId !== id;
     let next: ModelsJson;
     try {
-      next = await this.options.modelsFile.update((models) => {
-        if (models.providers[id] !== undefined && id !== previousId) throw PROVIDER_ID_COLLISION;
-        const base = previousId === undefined ? models : renameProviderId(models, previousId, id);
-        const updated = upsertProvider(base, id, buildProviderNode(parsed, base.providers[id]));
-        return parsed.multiplier === undefined
-          ? updated
-          : setMultiplier(updated, id, parsed.multiplier);
-      });
+      next = await this.options.modelsFile.update(
+        (models) => {
+          if (models.providers[id] !== undefined && id !== previousId) throw PROVIDER_ID_COLLISION;
+          const base = previousId === undefined ? models : renameProviderId(models, previousId, id);
+          const updated = upsertProvider(base, id, buildProviderNode(parsed, base.providers[id]));
+          return parsed.multiplier === undefined
+            ? updated
+            : setMultiplier(updated, id, parsed.multiplier);
+        },
+        { deferFailoverSync: moved },
+      );
     } catch (error) {
       if (error === PROVIDER_ID_COLLISION) return fail(P.duplicateId);
       throw error;
@@ -188,7 +191,8 @@ export class ProviderForm extends FormView {
       this.options.onProviderIdChange?.(id);
       await this.options.afterProviderRename?.(previousId, id, next);
     }
-    this.options.registrar.syncOwned(next);
+    if (!moved || this.options.afterProviderRename === undefined)
+      this.options.registrar.syncOwned(next);
     this.options.onDone(next);
   }
 }
