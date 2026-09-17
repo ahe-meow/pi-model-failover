@@ -72,6 +72,38 @@ describe("HistoryLog", () => {
     expect(fs.files.get("/d/history.jsonl")).toBe(original);
   });
 
+  it("redacts failure bodies on read and append without rewriting on list", async () => {
+    const fs = new MemoryFs();
+    const raw = {
+      ...event(1),
+      error: { body: "ordinary api_key=abcdefgh text" },
+      pluginNote: "kept",
+    };
+    const source = `${JSON.stringify(raw)}\n`;
+    fs.files.set("/d/history.jsonl", source);
+    const write = vi.spyOn(fs, "writeAtomic");
+    const log = await HistoryLog.open(fs, new WriteQueue(), "/d");
+
+    const listed = await log.list();
+
+    expect(listed.events[0]).toMatchObject({
+      pluginNote: "kept",
+      error: { body: "ordinary api_key=abc…efgh text" },
+    });
+    expect(write).not.toHaveBeenCalled();
+    expect(fs.files.get("/d/history.jsonl")).toBe(source);
+
+    await log.append({
+      ...event(2),
+      error: { body: "already api_key=abc…efgh and new api_key=zyxwvuts" },
+    });
+
+    const rewritten = fs.files.get("/d/history.jsonl") ?? "";
+    expect(rewritten).not.toContain("abcdefgh");
+    expect(rewritten).not.toContain("zyxwvuts");
+    expect(rewritten).toContain("already api_key=abc…efgh and new api_key=zyx…vuts");
+  });
+
   it("C17: drops JSON values that are not valid FailoverEvents", async () => {
     const fs = new MemoryFs();
     const valid = JSON.stringify(event(1));

@@ -1,6 +1,7 @@
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { ConfigStore } from "../../../config/configStore.js";
 import { resolveTargetSettings } from "../../../domain/chains.js";
+import type { ServerQualityOverride } from "../../../domain/serverQuality.js";
 import type {
   Chain,
   ErrorHandlingMode,
@@ -15,6 +16,8 @@ import type { TabComponent } from "../history.js";
 const E = String();
 const MODEL_PARAMETERS = "modelParameters";
 type Option<T extends string> = { value: T; label: string };
+type QualityKey = "enabled" | "ttft" | "noProgress";
+type QualityChoice = "inherit" | "on" | "off";
 type Registrar = { syncFailover(chains: Chain[], models: ModelsJson): void };
 
 export interface TargetFormOptions {
@@ -42,9 +45,10 @@ const REASONING_OPTIONS: readonly Option<TargetSettings["reasoningEffort"]>[] = 
   { value: "xhigh", label: S.chains.targetForm.options.reasoningEffort.xhigh },
   { value: "max", label: S.chains.targetForm.options.reasoningEffort.max },
 ];
-const TTFT_OPTIONS: readonly Option<TargetSettings["ttftAction"]>[] = [
-  { value: "cooldown-only", label: S.chains.targetForm.options.ttftAction.cooldownOnly },
-  { value: "abort", label: S.chains.targetForm.options.ttftAction.abort },
+const QUALITY_OPTIONS: readonly Option<QualityChoice>[] = [
+  { value: "inherit", label: S.chains.targetForm.options.serverQuality.inherit },
+  { value: "on", label: S.chains.targetForm.options.serverQuality.on },
+  { value: "off", label: S.chains.targetForm.options.serverQuality.off },
 ];
 
 function optionField<T extends string>(
@@ -69,8 +73,9 @@ function numberField(key: string, label: string, value: number): Field {
 function textField(key: string, label: string, value: string): Field {
   return { kind: "text", key, label, value, multiline: key === MODEL_PARAMETERS };
 }
-function fitBody(lines: string[], width: number, rows: number): string[] {
-  const body = lines.slice(0, rows).map((line) => truncateToWidth(line, width));
+function fitBody(lines: string[], width: number, rows: number, focusLine = 0): string[] {
+  const start = Math.max(0, focusLine - rows + 1);
+  const body = lines.slice(start, start + rows).map((line) => truncateToWidth(line, width));
   while (body.length < rows) body.push(E);
   return body;
 }
@@ -89,8 +94,27 @@ function selected<T extends string>(
   const label = text(values, key);
   return options.find((option) => option.label === label)?.value;
 }
-function fields(settings: TargetSettings): Field[] {
+function qualityChoice(
+  override: ServerQualityOverride | undefined,
+  key: QualityKey,
+): QualityChoice {
+  if (override?.[key] === true) return "on";
+  if (override?.[key] === false) return "off";
+  return "inherit";
+}
+function qualityWarning(effective: TargetSettings): Partial<Record<string, string>> | undefined {
+  if (
+    effective.serverQuality.enabled &&
+    (effective.serverQuality.ttft || effective.serverQuality.noProgress)
+  )
+    return undefined;
+  return Object.fromEntries(
+    QUALITY_OPTIONS.map(({ label }) => [label, S.serverQualityDisabledWarning]),
+  );
+}
+function fields(settings: TargetSettings, override: ServerQualityOverride | undefined): Field[] {
   const labels = S.chains.targetForm.labels;
+  const warning = qualityWarning(settings);
   return [
     optionField(
       "errorHandlingMode",
@@ -111,59 +135,78 @@ function fields(settings: TargetSettings): Field[] {
       settings.noProgressTimeoutSeconds,
     ),
     numberField("ttftTimeoutSeconds", labels.ttftTimeoutSeconds, settings.ttftTimeoutSeconds),
-    optionField("ttftAction", labels.ttftAction, settings.ttftAction, TTFT_OPTIONS, {
-      [S.chains.targetForm.options.ttftAction.abort]: S.abortWarning,
-    }),
+    optionField(
+      "serverQualityEnabled",
+      labels.serverQualityEnabled,
+      qualityChoice(override, "enabled"),
+      QUALITY_OPTIONS,
+      warning,
+    ),
+    optionField(
+      "serverQualityTtft",
+      labels.serverQualityTtft,
+      qualityChoice(override, "ttft"),
+      QUALITY_OPTIONS,
+    ),
+    optionField(
+      "serverQualityNoProgress",
+      labels.serverQualityNoProgress,
+      qualityChoice(override, "noProgress"),
+      QUALITY_OPTIONS,
+    ),
     textField("modelParameters", labels.modelParameters, JSON.stringify(settings.modelParameters)),
   ];
 }
-function parseSettings(values: Record<string, unknown>): TargetSettings | string {
+
+type ParsedSettings = Omit<TargetSettings, "serverQuality"> & {
+  serverQuality: Record<QualityKey, QualityChoice>;
+};
+
+function parseSettings(values: Record<string, unknown>): ParsedSettings | string {
   const errorHandlingMode = selected(values, "errorHandlingMode", ERROR_OPTIONS);
   const reasoningEffort = selected(values, "reasoningEffort", REASONING_OPTIONS);
-  const ttftAction = selected(values, "ttftAction", TTFT_OPTIONS);
+  const serverQualityEnabled = selected(values, "serverQualityEnabled", QUALITY_OPTIONS);
+  const serverQualityTtft = selected(values, "serverQualityTtft", QUALITY_OPTIONS);
+  const serverQualityNoProgress = selected(values, "serverQualityNoProgress", QUALITY_OPTIONS);
   const maxRetries = number(values, "maxRetries");
   const noProgressTimeoutSeconds = number(values, "noProgressTimeoutSeconds");
   const ttftTimeoutSeconds = number(values, "ttftTimeoutSeconds");
   if (
     errorHandlingMode === undefined ||
     reasoningEffort === undefined ||
-    ttftAction === undefined ||
+    serverQualityEnabled === undefined ||
+    serverQualityTtft === undefined ||
+    serverQualityNoProgress === undefined ||
     maxRetries === undefined ||
     noProgressTimeoutSeconds === undefined ||
     ttftTimeoutSeconds === undefined
   )
     return S.chains.form.saveFailed;
-  const raw = text(values, "modelParameters").trim();
-  if (raw === E)
-    return {
-      errorHandlingMode,
-      maxRetries,
-      reasoningEffort,
-      modelParameters: {},
-      noProgressTimeoutSeconds,
-      ttftTimeoutSeconds,
-      ttftAction,
-    };
-  try {
-    const modelParameters: unknown = JSON.parse(raw);
-    if (
-      modelParameters === null ||
-      typeof modelParameters !== "object" ||
-      Array.isArray(modelParameters)
-    )
+  const raw = text(values, MODEL_PARAMETERS).trim();
+  let modelParameters: Record<string, unknown> = {};
+  if (raw !== E) {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed))
+        return S.chains.targetForm.invalidParameters;
+      modelParameters = structuredClone(parsed) as Record<string, unknown>;
+    } catch {
       return S.chains.targetForm.invalidParameters;
-    return {
-      errorHandlingMode,
-      maxRetries,
-      reasoningEffort,
-      modelParameters: structuredClone(modelParameters) as Record<string, unknown>,
-      noProgressTimeoutSeconds,
-      ttftTimeoutSeconds,
-      ttftAction,
-    };
-  } catch {
-    return S.chains.targetForm.invalidParameters;
+    }
   }
+  return {
+    errorHandlingMode,
+    maxRetries,
+    reasoningEffort,
+    modelParameters,
+    noProgressTimeoutSeconds,
+    ttftTimeoutSeconds,
+    serverQuality: {
+      enabled: serverQualityEnabled,
+      ttft: serverQualityTtft,
+      noProgress: serverQualityNoProgress,
+    },
+  };
 }
 
 export class TargetForm implements TabComponent {
@@ -175,7 +218,7 @@ export class TargetForm implements TabComponent {
     const chain = config.chains.find((candidate) => candidate.id === options.chainId);
     const target = chain?.targets[options.targetIndex] ?? { provider: E, modelId: E };
     this.form = new Form(
-      fields(resolveTargetSettings(target, config.settings)),
+      fields(resolveTargetSettings(target, config.settings), target.serverQuality),
       (values) => {
         this.pending = this.save(values);
       },
@@ -189,9 +232,13 @@ export class TargetForm implements TabComponent {
       .chains.find((candidate) => candidate.id === this.options.chainId);
     const target = chain?.targets[this.options.targetIndex];
     const ref = target === undefined ? E : `${target.provider}/${target.modelId}`;
+    const body = this.form.render(width);
+    const focusLine = this.form.isEditing()
+      ? 0
+      : this.form.focus + (this.form.focus > 5 && body.length > 9 ? 1 : 0);
     return [
       theme.title(truncateToWidth(S.chains.targetForm.title(ref), width)),
-      ...fitBody(this.form.render(width), width, rows),
+      ...fitBody(body, width, rows, focusLine),
     ];
   }
 
@@ -225,7 +272,18 @@ export class TargetForm implements TabComponent {
         const chain = config.chains.find((candidate) => candidate.id === this.options.chainId);
         const target = chain?.targets[this.options.targetIndex];
         if (target === undefined) throw new Error(S.chains.targetForm.saveFailed);
-        Object.assign(target, parsed, { modelParameters: structuredClone(parsed.modelParameters) });
+        const override: ServerQualityOverride = { ...(target.serverQuality ?? {}) };
+        for (const key of ["enabled", "ttft", "noProgress"] as const) {
+          const choice = parsed.serverQuality[key];
+          if (choice === "inherit") delete override[key];
+          else override[key] = choice === "on";
+        }
+        const { serverQuality: _serverQuality, ...knownSettings } = parsed;
+        Object.assign(target, knownSettings, {
+          modelParameters: structuredClone(parsed.modelParameters),
+        });
+        if (Object.keys(override).length === 0) delete target.serverQuality;
+        else target.serverQuality = override;
       });
       this.options.registrar.syncFailover(
         structuredClone(this.options.config.get().chains),

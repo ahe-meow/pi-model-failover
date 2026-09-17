@@ -10,6 +10,8 @@
 
 **Spec:** `docs/design/00-goal.md` through `06-roadmap.md`, `CONTEXT.md`, `docs/adr/0001`–`0005`.
 
+> **Historical plan notice:** This P0 execution plan is completed and superseded; do not treat its task steps or pre-v2 examples as the current implementation contract. Use `docs/design/00-goal.md` through `06-roadmap.md` and the current `src/` implementation instead. The v2 contract uses global `serverQuality: { enabled, ttft, noProgress }`, optional Target `inherit`/`on`/`off` overrides, request-start policy snapshots, `server-quality` timer classification, a shared retry budget/backoff, and cooldown/history only after retry exhaustion.
+
 ## Global Constraints
 
 - Node `>=20`; `"type": "module"`; `main` is `./src/index.ts` (Pi loads TypeScript source).

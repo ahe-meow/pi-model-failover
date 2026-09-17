@@ -1,30 +1,24 @@
 ---
-status: accepted
+status: superseded
+superseded_by: v2-server-quality-contract
 ---
 
-# TTFT timeout defaults to cooldown-only, not abort
+# Server Quality switches replace the cooldown-only TTFT action
 
-When a Target exceeds its TTFT Budget (default 60 s), the default action lets the request finish and only marks the Target for cooldown so the next request switches. Aborting is available as an opt-in per-target setting with a billing warning in the UI.
-
-## Context
-
-Slow first tokens are the most common complaint about relays. The obvious fix is to cancel and move on. Most providers and relays bill the prompt tokens of a cancelled request; a 150k-token context aborted three times in a row costs three full prompts and produces nothing. In `smart` mode the request usually completes a few seconds late, and the cooldown still steers later requests away.
-
-## Considered options
-
-1. **Default `cooldown-only`, opt-in `abort` with warning** (chosen).
-2. **Default `abort`.** Fast recovery, silent triple billing on large contexts.
-3. **No TTFT budget; rely on No-Progress Budget only.** No-progress starts counting after the first delta, so a target that never sends anything is caught only by the network timeout, which can be minutes.
+The v2 contract replaces the earlier `ttftAction: cooldown-only | abort` design. The old decision remains historical context: cancelling a stream can incur prompt charges, so timeout behavior must be explicit and bounded by the request retry policy rather than silently discarding work.
 
 ## Decision
 
-- New Target settings: `ttftTimeoutSeconds` (default 60, `0` disables) and `ttftAction: cooldown-only | abort` (default `cooldown-only`). Global defaults for both live in the Settings tab.
-- `cooldown-only`: the request continues; when the budget expires the engine records a Failover Event with `reason: ttft-timeout` and raises the Target's Cooldown Level once the request ends, regardless of its outcome.
-- `abort`: the engine cancels the request through its `AbortSignal`, records the event, raises the Cooldown Level, and tries the next Target within the same request.
-- The Settings and Target forms show this text next to `abort`, verbatim: "Aborting still bills the prompt tokens of the aborted request on most providers/relays."
-- TTFT is measured from request send to the first delta that carries text, tool-call, or thinking content. Empty keep-alive chunks do not count.
+- Global settings store `serverQuality: { enabled, ttft, noProgress }` alongside the TTFT and no-progress timeout values.
+- A Target may override each Server Quality field with `inherit`, `on`, or `off`. The effective policy is resolved once at request start, so settings changes affect later requests, not an in-flight request.
+- A disabled signal starts no timer. An enabled TTFT or no-progress timer failure is classified as `server-quality` with the display reason `ttft-timeout` or `no-progress`.
+- In `retry` mode, and for Server Quality failures in `smart` mode, timer failures use the same `maxRetries` counter and exponential backoff as other retryable failures. `switch` advances immediately.
+- Cooldown state and one History event are written only after the shared retry budget is exhausted, except that `switch` records immediately. Changing Targets resets the request retry counter.
+
+## Migration
+
+Config version 2 migrates v1 global and Target `ttftAction` fields by removing the legacy fields and letting Targets inherit the migrated global Server Quality defaults. Unknown configuration fields remain intact.
 
 ## Consequences
 
-- With the default, the first slow request per Target is slow. Users who prefer speed over cost flip to `abort` per Target or globally.
-- The `abort` path is the only place the engine cancels a stream mid-flight; it needs its own tests for partial-output handling (the aborted partial text is discarded and never surfaced to Pi).
+The engine no longer has a pending-cooldown completion path or a billing warning for an `abort` option. Users choose whether timers are enabled and whether timer failures retry or switch through the shared Server Quality and error-handling controls. Timer failures remain visible in History through their stable display reasons.

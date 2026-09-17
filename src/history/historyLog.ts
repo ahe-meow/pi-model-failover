@@ -1,5 +1,6 @@
 import type { WriteQueue } from "../config/writeQueue.js";
 import type { FileSystem } from "../domain/ports.js";
+import { redactFailureBody } from "../domain/redact.js";
 import type { FailoverErrorDetails, FailoverEvent, TargetRef } from "../domain/types.js";
 
 const DEFAULT_CAP = 500;
@@ -41,8 +42,16 @@ function errorDetails(value: unknown): FailoverErrorDetails | undefined {
     details.status = record.status;
   }
   if (typeof record.code === "string") details.code = record.code;
-  if (typeof record.body === "string") details.body = record.body;
+  if (typeof record.body === "string") details.body = redactFailureBody(record.body);
   return Object.keys(details).length === 0 ? undefined : details;
+}
+
+type EventWithOptionalError = FailoverEvent & { error?: unknown };
+
+function redactEvent(event: EventWithOptionalError): EventWithOptionalError {
+  const { error: rawError, ...rest } = event;
+  const details = errorDetails(rawError);
+  return details === undefined ? rest : { ...rest, error: details };
 }
 
 function providerOf(ref: TargetRef): string {
@@ -77,7 +86,7 @@ export class HistoryLog {
   append(event: FailoverEvent): Promise<void> {
     const write = this.queue.enqueue(async () => {
       const { events } = await this.readEvents();
-      events.push(event);
+      events.push(redactEvent(event));
       const retained = this.cap === 0 ? [] : events.slice(-this.cap);
       const text = retained.map((entry) => JSON.stringify(entry)).join("\n");
       await this.fs.writeAtomic(this.path, text === "" ? "" : `${text}\n`, 0o600);
@@ -122,9 +131,7 @@ export class HistoryLog {
           dropped++;
           continue;
         }
-        const { error: rawError, ...rest } = value as FailoverEvent & { error?: unknown };
-        const details = errorDetails(rawError);
-        events.push(details === undefined ? rest : { ...rest, error: details });
+        events.push(redactEvent(value));
       } catch {
         dropped++;
       }

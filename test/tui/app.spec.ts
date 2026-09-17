@@ -91,8 +91,8 @@ describe("app frame (C19, C20)", () => {
   });
   it("keeps frame height when Settings reset confirmation opens", async () => {
     const { app } = await mk();
-    const normalHeight = app.render(78).length;
     app.handleInput("4");
+    const normalHeight = app.render(78).length;
     for (let i = 0; i < 6; i++) app.handleInput(Key.down);
     app.handleInput(Key.enter);
 
@@ -146,7 +146,7 @@ describe("app frame (C19, C20)", () => {
       const rendered = app.render(78);
       expect(rendered[1]).toContain(`[4 ${S.tabs[3]}]`);
       expect(rendered.join("\n")).toContain(
-        `${S.settings.labels.ttftTimeoutSeconds} ${S.help.zeroDisables}${60 + Number(digit)}`,
+        `${S.settings.labels.ttftTimeoutSeconds} ${S.help.zeroDisables}${" ".repeat(4)}${60 + Number(digit)}`,
       );
     }
   });

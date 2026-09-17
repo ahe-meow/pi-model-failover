@@ -370,7 +370,7 @@ describe("extension entry", () => {
     expect(app).toBeDefined();
 
     app?.handleInput("4");
-    for (let i = 0; i < 6; i++) app?.handleInput(Key.down);
+    for (let i = 0; i < 8; i++) app?.handleInput(Key.down);
     app?.handleInput(Key.enter);
     app?.handleInput(Key.left);
     app?.handleInput(Key.enter);

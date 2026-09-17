@@ -1,3 +1,5 @@
+import type { ServerQualityOverride, ServerQualitySettings } from "./serverQuality.js";
+
 export type ApiType =
   | "openai-completions"
   | "openai-responses"
@@ -5,8 +7,7 @@ export type ApiType =
   | "google-generative-ai";
 export type TargetRef = `${string}/${string}`;
 export type ErrorHandlingMode = "smart" | "switch" | "retry";
-export type TtftAction = "cooldown-only" | "abort";
-export type FailureClass = "cooldown" | "persistent" | "compat-retry";
+export type FailureClass = "cooldown" | "persistent" | "compat-retry" | "server-quality";
 export type FailoverReason =
   | `http-${number}`
   | "network"
@@ -63,11 +64,12 @@ export interface TargetSettings {
   modelParameters: Record<string, unknown>;
   noProgressTimeoutSeconds: number;
   ttftTimeoutSeconds: number;
-  ttftAction: TtftAction;
+  serverQuality: ServerQualitySettings;
 }
-export interface Target extends Partial<TargetSettings> {
+export interface Target extends Omit<Partial<TargetSettings>, "serverQuality"> {
   provider: string;
   modelId: string;
+  serverQuality?: ServerQualityOverride;
 }
 export interface Chain {
   id: string;

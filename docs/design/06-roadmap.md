@@ -68,13 +68,13 @@ Deliverables:
 - `domain/chains.ts`, `domain/failureClass.ts`, `domain/cooldown.ts`, `domain/engine.ts`.
 - `config/sharedState.ts` (lock + CAS + memory mode).
 - `adapters/failoverProvider.ts`; `Registrar.syncFailover`.
-- `tui/tabs/chains.ts` with chain list, chain detail, target settings form (with the `abort` warning), add targets, Same-Model Import preview, reset keys; Settings tab gains the `abort` warning and "reset all".
+- `tui/tabs/chains.ts` with chain list, chain detail, Target settings form with tri-state Server Quality overrides and the disabled-timer warning, add targets, Same-Model Import preview, reset keys; Settings tab gains global Server Quality switches and the shared warning.
 - Provider delete confirmation now lists affected chains (C7 UI half).
 
 Acceptance:
 
 - C7–C16 and C23 pass as vitest tests (engine tests use fake `send` and fake clock; shared-state CAS test simulates a second process by editing the file between reads).
-- Manual: chain of two providers where the first key is revoked; a request lands on the second provider, History shows `persistent`; a chain where the first target is a sleeping relay shows `ttft-timeout` and the next request starts on target two; with `abort` the same request completes on target two.
+- Manual: chain of two providers where the first key is revoked; a request lands on the second provider, History shows `persistent`; with Server Quality enabled, a sleeping relay produces `ttft-timeout` or `no-progress` and follows the Target's retry policy—`smart`/`retry` share `maxRetries` and backoff, while `switch` advances immediately. Cooldown and History are written after retry exhaustion.
 - Two terminals running Pi share cooldowns (C14) observed by hand.
 
 Subagent design:
@@ -105,7 +105,7 @@ Subagent design: two sequential workers (`historyLog.ts`, then the tab). No fan-
 
 Deliverables:
 
-- `README.md`: install, `/failover` tour with the mockups from `04-ui.md`, coexistence note (ADR-0001), TTFT billing warning (ADR-0005), file locations, redaction policy.
+- `README.md`: install, `/failover` tour with the mockups from `04-ui.md`, coexistence note (ADR-0001), Server Quality switches and retry semantics, file locations, redaction policy.
 - Peer dependency ranges pinned to the installed Pi major; `version` set to `2.0.0`.
 - `npm pack --dry-run` shows only `src/`, `README.md`, `LICENSE`, `package.json`.
 - `npm publish --dry-run` succeeds (publish itself is a user action).

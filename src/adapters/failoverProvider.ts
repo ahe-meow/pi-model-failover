@@ -14,7 +14,13 @@ import type { ProviderConfig } from "@earendil-works/pi-coding-agent";
 import type { ConfigStore } from "../config/configStore.js";
 import type { SharedState } from "../config/sharedState.js";
 import { virtualModelNode } from "../domain/chains.js";
-import { type Attempt, type EngineDeps, runChain, type StreamChunk } from "../domain/engine.js";
+import {
+  type Attempt,
+  type EngineDeps,
+  type FallbackNotice,
+  runChain,
+  type StreamChunk,
+} from "../domain/engine.js";
 import type { Clock } from "../domain/ports.js";
 import type { ModelsJson, TargetRef, TargetSettings } from "../domain/types.js";
 import { normalizeReasoningEffort, normalizeThinkingLevelMap } from "../domain/types.js";
@@ -54,6 +60,8 @@ export interface FailoverProviderDeps {
   clock: Clock;
   sessionId: string;
   thinkingLevel: () => ModelThinkingLevel;
+  onTargetAttempt?: (target: TargetRef) => void;
+  onFallback?: (notice: FallbackNotice) => void;
 }
 
 type FailureError = Error & {
@@ -346,6 +354,10 @@ export function createFailoverProvider(deps: FailoverProviderDeps): {
             history: deps.history,
             clock: deps.clock,
             sessionId: deps.sessionId,
+            ...(deps.onTargetAttempt === undefined
+              ? {}
+              : { onTargetAttempt: deps.onTargetAttempt }),
+            ...(deps.onFallback === undefined ? {} : { onFallback: deps.onFallback }),
           };
           for await (const event of runChain(
             engineDeps,

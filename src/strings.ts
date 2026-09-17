@@ -6,29 +6,27 @@ export const S = {
   commandDescription: "Manage providers, failover chains, history",
   // biome-ignore format: keep model switch strings together
   modelSwitch: { selected: (ref: string) => `Using ${ref}`, unavailable: "Selected model is not available", authMissing: (ref: string) => `No configured authentication for ${ref}`, failed: "Could not switch model" },
-  abortWarning: `Aborting still bills the prompt tokens of the aborted request on most providers/relays.`,
+  serverQualityDisabledWarning:
+    "Server Quality timers are disabled; requests may wait until the provider or Pi aborts.",
   modelsJsonInvalid: "models.json is invalid",
   sharedState: {
     invalid: "state.json is invalid; using memory mode",
     newerVersion: "state.json uses a newer version; using memory mode",
   },
   // biome-ignore format: keep registrar strings together
-  registrar: { builtinSkipped: (id: string) => `Skipping built-in provider ${id}`, registrationFailed: (id: string) => `Failed to register provider ${id}` },
+  ...{ registrar: { builtinSkipped: (id: string) => `Skipping built-in provider ${id}`, registrationFailed: (id: string) => `Failed to register provider ${id}` }, footer: { current: (target: string) => target, fallback: (target: string, reason?: string) => reason === undefined ? target : `${target} <- ${reason}` } },
   settingsHeader: "Global settings (targets without a value use these)",
-  settings: {
-    labels: {
+  // biome-ignore format: keep settings table strings together
+  settings: { tableHeader: "Setting  Value", labels: {
       listRows: "List rows",
       ttftTimeoutSeconds: "TTFT timeout seconds",
-      ttftAction: "TTFT action",
+      serverQualityEnabled: "Server Quality enabled", serverQualityTtft: "Server Quality TTFT", serverQualityNoProgress: "Server Quality no-progress",
       maxRetries: "Max retries",
       errorHandlingMode: "Error handling mode",
       noProgressTimeoutSeconds: "No-progress timeout seconds",
     },
     options: {
-      ttftAction: {
-        cooldownOnly: "Cooldown only",
-        abort: "Abort",
-      },
+      serverQuality: { on: "on", off: "off" },
       errorHandlingMode: {
         smart: "Smart",
         switch: "Switch",
@@ -226,7 +224,9 @@ export const S = {
         reasoningEffort: "Reasoning effort",
         noProgressTimeoutSeconds: "No-progress timeout seconds",
         ttftTimeoutSeconds: "TTFT timeout seconds",
-        ttftAction: "TTFT action",
+        serverQualityEnabled: "Server Quality enabled",
+        serverQualityTtft: "Server Quality TTFT",
+        serverQualityNoProgress: "Server Quality no-progress",
         modelParameters: "Model parameters (JSON)",
       },
       options: {
@@ -244,10 +244,7 @@ export const S = {
           xhigh: "xhigh",
           max: "max",
         },
-        ttftAction: {
-          cooldownOnly: "Cooldown only",
-          abort: "Abort",
-        },
+        serverQuality: { inherit: "inherit", on: "on", off: "off" },
       },
       invalidParameters: "Model parameters must be a JSON object",
       saveFailed: "Could not save Target settings",

@@ -28,6 +28,14 @@ import { normalizeThinkingLevelMap } from "./domain/types.js";
 import { HistoryLog } from "./history/historyLog.js";
 import { S } from "./strings.js";
 import { type AppDeps, createApp } from "./tui/app.js";
+import {
+  createFooterState,
+  FOOTER_STATUS_KEYS,
+  type FooterState,
+  footerStatusValues,
+  updateCurrentTarget,
+  updateFallback,
+} from "./tui/footer.js";
 import type { ModelsFileUpdateOptions } from "./tui/tabs/modelManager/types.js";
 
 function hasStreamSimple(value: unknown): value is ProviderConfig {
@@ -72,6 +80,11 @@ export function toPiProviderConfig(value: unknown): ProviderConfig {
 
 export type { Clock, Fetch, FileSystem } from "./domain/ports.js";
 export type {
+  ServerQualityOverride,
+  ServerQualitySettings,
+  ServerQualitySignal,
+} from "./domain/serverQuality.js";
+export type {
   ApiType,
   CatalogModel,
   Chain,
@@ -89,7 +102,6 @@ export type {
   TargetRef,
   TargetSettings,
   TargetState,
-  TtftAction,
 } from "./domain/types.js";
 
 function targetRef(target: { provider: string; modelId: string }): TargetRef {
@@ -147,6 +159,28 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     latestNotify?.(message),
   );
   const history = await HistoryLog.open(nodeFs, queue, dir);
+  let footerState: FooterState = createFooterState();
+  const retainedFallback = (await history.list()).events.find(
+    (event) => event.to !== null && event.reason !== "manual",
+  );
+  if (retainedFallback !== undefined) footerState = updateFallback(footerState, retainedFallback);
+  let statusContext: ExtensionContext | undefined;
+  const updateStatuses = (ctx = statusContext): void => {
+    if (ctx?.mode !== "tui" || typeof ctx.ui.setStatus !== "function") return;
+    const values = footerStatusValues(footerState);
+    ctx.ui.setStatus(FOOTER_STATUS_KEYS.current, values.current);
+    ctx.ui.setStatus(FOOTER_STATUS_KEYS.fallback, values.fallback);
+  };
+  const setStatusContext = (ctx: ExtensionContext): void => {
+    statusContext = ctx.mode === "tui" ? ctx : undefined;
+    updateStatuses();
+  };
+  const updateStatusState = (next: FooterState): void => {
+    if (next === footerState) return;
+    footerState = next;
+    updateStatuses();
+  };
+
   const modelsFile = new ModelsJsonFile(nodeFs, queue, join(getAgentDir(), "models.json"));
   let currentRegistry: ModelRegistryLike | undefined;
   type ThinkingLevel = NonNullable<ExtensionContext["thinkingLevel"]>;
@@ -172,6 +206,12 @@ export default async function (pi: ExtensionAPI): Promise<void> {
         history,
         clock,
         sessionId,
+        onTargetAttempt: (target) => {
+          updateStatusState(updateCurrentTarget(footerState, target));
+        },
+        onFallback: (notice) => {
+          updateStatusState(updateFallback(footerState, notice));
+        },
         thinkingLevel: () => thinkingLevel,
       }).config,
   );
@@ -188,10 +228,12 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     },
   };
 
-  const refresh = async (_event: SessionStartEvent, ctx: ExtensionContext): Promise<void> => {
+  const refresh = async (event: SessionStartEvent, ctx: ExtensionContext): Promise<void> => {
+    if (event.reason !== "reload") footerState = { ...footerState, currentTarget: null };
     currentRegistry = ctx.modelRegistry;
     setThinkingLevel(ctx.thinkingLevel);
     models = await modelsFile.read();
+    setStatusContext(ctx);
     registrar.syncOwned(models);
     registrar.syncFailover(config.get().chains, models);
   };
@@ -233,6 +275,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 
       currentRegistry = ctx.modelRegistry;
       setThinkingLevel(ctx.thinkingLevel);
+      setStatusContext(ctx);
       latestNotify = (message) => ctx.ui.notify(message, "warning");
       await ctx.ui.custom((_tui, _theme, _keybindings, done) => {
         const appDeps: AppDeps = {

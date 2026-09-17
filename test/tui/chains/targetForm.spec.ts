@@ -15,7 +15,7 @@ const settings: Settings = {
   modelParameters: { temperature: 0.2 },
   noProgressTimeoutSeconds: 90,
   ttftTimeoutSeconds: 60,
-  ttftAction: "cooldown-only",
+  serverQuality: { enabled: true, ttft: true, noProgress: true },
 };
 const model: ModelNode = {
   id: "m",
@@ -26,11 +26,12 @@ const model: ModelNode = {
   maxTokens: 1_000,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 };
-const target: Target = {
+const target = {
   provider: "relay",
   modelId: "m",
-  ttftAction: "abort",
-};
+  unknownTarget: "keep",
+  serverQuality: { enabled: false, ttft: true, unknownSignal: "keep" },
+} as unknown as Target;
 const chain: Chain = { id: "coding", name: "Coding", targets: [target] };
 const models: ModelsJson = {
   providers: {
@@ -62,21 +63,50 @@ async function makeDeps(): Promise<TargetFormOptions & { config: ConfigStore }> 
 }
 
 describe("TargetForm", () => {
-  it("shows the exact abort billing warning", async () => {
+  it("shows the Server Quality warning for a disabled effective target policy", async () => {
     const form = new TargetForm(await makeDeps());
-    expect(form.render(120, 7).join("\n")).toContain(S.abortWarning);
+    expect(form.render(120, 12).join("\n")).toContain(S.serverQualityDisabledWarning);
   });
 
-  it("offers inherit plus the six reasoning levels in order", async () => {
+  it("offers inherit, on, off for each Server Quality switch", async () => {
     const form = new TargetForm(await makeDeps());
-    const rendered = form.render(160, 7).join("\n");
-    const options = ["inherit", "off", "low", "medium", "high", "xhigh", "max"];
-    expect(options.every((option) => rendered.includes(option))).toBe(true);
-    expect(rendered).not.toContain("minimal");
-    const positions = options.map((option) => rendered.indexOf(option));
-    expect(
-      positions.every((position, index) => index === 0 || position > (positions[index - 1] ?? -1)),
-    ).toBe(true);
+    const rendered = form.render(160, 12).join("\n");
+    expect(rendered.match(/\[.\] (inherit|on|off)/g)?.length).toBeGreaterThanOrEqual(9);
+    expect(rendered).toContain(S.chains.targetForm.labels.serverQualityEnabled);
+    expect(rendered).toContain(S.chains.targetForm.labels.serverQualityTtft);
+    expect(rendered).toContain(S.chains.targetForm.labels.serverQualityNoProgress);
+  });
+
+  it("saves tri-state overrides while retaining unknown target data", async () => {
+    const deps = await makeDeps();
+    const update = vi.spyOn(deps.config, "update");
+    const form = new TargetForm(deps);
+
+    for (let index = 0; index < 5; index++) await form.handleInput(Key.down);
+    await form.handleInput(Key.enter);
+    await form.handleInput(Key.up);
+    await form.handleInput(Key.up);
+    await form.handleInput(Key.enter);
+    await form.handleInput(Key.ctrl("s"));
+
+    await form.handleInput(Key.down);
+    await form.handleInput(Key.enter);
+    await form.handleInput(Key.down);
+    await form.handleInput(Key.enter);
+    await form.handleInput(Key.ctrl("s"));
+
+    await form.handleInput(Key.down);
+    await form.handleInput(Key.enter);
+    await form.handleInput(Key.down);
+    await form.handleInput(Key.enter);
+    await form.handleInput(Key.ctrl("s"));
+
+    expect(update).toHaveBeenCalledTimes(3);
+    const saved = deps.config.get().chains[0]?.targets[0];
+    expect(saved).toMatchObject({ provider: "relay", modelId: "m", unknownTarget: "keep" });
+    expect(saved?.serverQuality).toEqual({ ttft: false, noProgress: true, unknownSignal: "keep" });
+    expect(deps.registrar.syncFailover).toHaveBeenCalledTimes(3);
+    expect(deps.onDone).toHaveBeenCalledTimes(3);
   });
 
   it("saves target settings through one ConfigStore update", async () => {
@@ -84,14 +114,20 @@ describe("TargetForm", () => {
     const update = vi.spyOn(deps.config, "update");
     const form = new TargetForm(deps);
 
-    for (let index = 0; index < 6; index++) await form.handleInput(Key.down);
-    await form.handleInput(Key.enter);
-    expect(update).not.toHaveBeenCalled();
     await form.handleInput(Key.ctrl("s"));
 
     expect(update).toHaveBeenCalledTimes(1);
     expect(deps.registrar.syncFailover).toHaveBeenCalledTimes(1);
     expect(deps.onDone).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the focused Server Quality field visible at minimum rows", async () => {
+    const form = new TargetForm(await makeDeps());
+    for (let index = 0; index < 6; index++) await form.handleInput(Key.down);
+
+    const rendered = form.render(78, 5);
+    expect(rendered).toHaveLength(6);
+    expect(rendered.join("\n")).toContain(S.chains.targetForm.labels.serverQualityTtft);
   });
 
   it("renders a fixed body and cancels without writing", async () => {

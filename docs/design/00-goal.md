@@ -26,9 +26,9 @@ Each criterion has a stable id `C1` to `C23`. Tests quote the id in their name (
 
 - **C8** A Chain with Targets A, B, C where A returns HTTP 503: the request completes on B within the same request, A gets Cooldown Level 1 (1 minute), and one Failover Event with `reason: http-503` is appended.
 - **C9** A returns 401: A enters Manual Recovery, the request completes on B, and A is skipped on every later request until the user presses `r` on it.
-- **C10** A sends no delta for 60 s with `ttftAction: cooldown-only`: the request finishes on A, an event with `reason: ttft-timeout` is logged, and the next request starts on B.
-- **C11** Same scenario with `ttftAction: abort`: the request is cancelled at 60 s and completes on B within the same request.
-- **C12** A sends deltas then goes silent for 90 s: `reason: no-progress`, request continues on B.
+- **C10** With TTFT enabled, A's 60 s timer failure is retried under `smart` or `retry` using the shared `maxRetries` and backoff budget; after exhaustion, one `ttft-timeout` event is logged and the next Target is tried.
+- **C11** With the same timer and `switch` mode, A advances immediately to B and records the timer failure without consuming a retry.
+- **C12** With no-progress enabled, A sends a meaningful delta and then goes silent for 90 s; the `no-progress` server-quality failure follows the same shared retry/exhaustion policy.
 - **C13** Consecutive failures on A raise Cooldown Level 1, 2, 3, 4 with cooldowns 1, 5, 15, 60 minutes; a fifth failure stays at 60 minutes; one success resets to level 0.
 - **C14** Two Pi sessions share one `state.json`: a cooldown set in session 1 is honored by session 2 on its next request.
 - **C15** A request parameter rejection (`reasoning_effort` unknown, for example) is retried without the parameter and raises no Cooldown Level.

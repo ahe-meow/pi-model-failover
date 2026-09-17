@@ -44,7 +44,7 @@ const settings = (overrides: Partial<Settings> = {}): Settings => ({
   modelParameters: {},
   noProgressTimeoutSeconds: 90,
   ttftTimeoutSeconds: 60,
-  ttftAction: "cooldown-only",
+  serverQuality: { enabled: true, ttft: true, noProgress: true },
   ...overrides,
 });
 
@@ -209,7 +209,7 @@ function makeHarness(options: HarnessOptions = {}): Harness {
     append: vi.fn(async (event: FailoverEvent) => history.push(structuredClone(event))),
   } as unknown as HistoryLog;
   const configValue: ConfigFile = {
-    version: 1,
+    version: 2,
     settings: settings(options.settings),
     catalog: [],
     keyGroups: [],
@@ -555,7 +555,7 @@ describe("failover Provider adapter", () => {
     const harness = makeHarness({
       clock,
       streamFactory: (call) => (call === 0 ? hanging : successfulStream()),
-      chains: [chain([target("relay", { ttftAction: "abort" }), target("backup")])],
+      chains: [chain([target("relay"), target("backup")])],
     });
     const outward = createFailoverProvider(harness.deps).config.streamSimple?.(
       virtualModel(),

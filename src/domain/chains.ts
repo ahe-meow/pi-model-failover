@@ -1,4 +1,5 @@
 import { providersWithModel } from "./providers.js";
+import { resolveServerQuality } from "./serverQuality.js";
 import type {
   Chain,
   ModelNode,
@@ -161,6 +162,6 @@ export function resolveTargetSettings(target: Target, settings: Settings): Targe
     modelParameters: clone(target.modelParameters ?? settings.modelParameters),
     noProgressTimeoutSeconds: target.noProgressTimeoutSeconds ?? settings.noProgressTimeoutSeconds,
     ttftTimeoutSeconds: target.ttftTimeoutSeconds ?? settings.ttftTimeoutSeconds,
-    ttftAction: target.ttftAction ?? settings.ttftAction,
+    serverQuality: resolveServerQuality(settings.serverQuality, target.serverQuality),
   };
 }

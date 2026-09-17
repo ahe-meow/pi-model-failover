@@ -34,7 +34,7 @@ The command opens four tabs:
 | **Model Manager** | Add or edit providers, paste API keys in batches, import catalog models, and sync attributes. |
 | **Chains** | Create ordered Chains, edit Target settings, add individual Targets, or use Same-Model Import. Each Chain appears to Pi as `failover/<chain-id>`. |
 | **History** | Review newest-first failover events, filter by Chain or provider, inspect event JSON, reset a Target, and refresh the JSONL log. |
-| **Settings** | Set global retry/TTFT/no-progress defaults and reset every Target's cooldown or manual recovery state. |
+| **Settings** | Set global Server Quality switches and timeout defaults, then reset every Target's cooldown or manual recovery state. |
 
 Typical flow:
 
@@ -44,7 +44,7 @@ Typical flow:
 4. Select `failover/<chain-id>` from Pi's normal model picker.
 5. Inspect failures in **History**; use `r` to reset a recovered Target after fixing its credentials.
 
-The Chain detail view lists each Target's number, `provider/modelId`, cost multiplier, and current status (`ok`, `cool`, or `manual`); retry mode, TTFT settings, and per-target `reasoningEffort` live in the Target settings form opened with `Enter`.
+The Chain detail view lists each Target's number, `provider/modelId`, cost multiplier, and current status (`ok`, `cool`, or `manual`); retry mode, timeout values, Server Quality overrides, and per-target `reasoningEffort` live in the Target settings form opened with `Enter`.
 
 ## Failover behavior
 
@@ -53,15 +53,15 @@ The Chain detail view lists each Target's number, `provider/modelId`, cost multi
 - **History** shows the real HTTP reason plus the provider's structured error detail (`status`, `code`, and response `body`); the body is redacted before it is written.
 - Cooldowns use the capped ladder `1 / 5 / 15 / 60` minutes.
 - A request-parameter rejection can retry once without the rejected parameter and does not raise a cooldown.
-- `ttftAction: cooldown-only` lets the current request finish; `ttftAction: abort` cancels the attempt and switches during the same request.
-
-> **Billing warning:** Aborting still bills the prompt tokens of the aborted request on most providers/relays.
+- Server Quality has global `serverQuality: { enabled, ttft, noProgress }` switches and optional per-Target `inherit`/`on`/`off` overrides. Disabled signals do not start timers; requests continue until the provider or Pi aborts.
+- The effective Server Quality policy is snapshotted when a request starts. Timer failures classify as `server-quality` while retaining `ttft-timeout` or `no-progress` as their History reason.
+- In `retry` mode, and for Server Quality failures in `smart` mode, timer failures share the Target's `maxRetries` and backoff budget. `switch` advances immediately. Cooldown state and History are written only when the shared retry budget is exhausted (or immediately in `switch` mode).
 
 ## Coexistence with Pi
 
 The extension uses Pi's existing `models.json` provider format and registration APIs. It adds only its own managed provider nodes and the reserved `failover` Virtual Models. Pi's built-in providers and the existing Model Manager continue to work normally.
 
-Provider deletion removes the selected provider node, removes its Targets from affected Chains, and refreshes the affected Virtual Models. Renaming a provider ID moves the `models.json` key, rewrites matching Chain Targets, and carries the Target's cooldown and Manual Recovery state to the new ID; past History rows keep the ID they were recorded with. The extension does not migrate V1 configuration or rewrite unrelated `models.json` fields.
+Provider deletion removes the selected provider node, removes its Targets from affected Chains, and refreshes the affected Virtual Models. Renaming a provider ID moves the `models.json` key, rewrites matching Chain Targets, and carries the Target's cooldown and Manual Recovery state to the new ID; past History rows keep the ID they were recorded with. Configuration is version 2. Loading a v1 file migrates its global and Target legacy `ttftAction` fields to the v2 Server Quality contract, removes those legacy fields, and preserves unknown data; new Target overrides remain optional so omitted fields inherit global settings.
 
 ## Files and permissions
 

@@ -68,6 +68,7 @@ function cursorValue(value: string, cursor: number, width: number): string {
 
 export interface FormOptions {
   exitOnEscape?: boolean;
+  labelWidth?: number;
 }
 
 export class Form {
@@ -98,7 +99,7 @@ export class Form {
 
     const out: string[] = [];
     this.fields.forEach((field, index) => {
-      const label = field.label.padEnd(26);
+      const label = field.label.padEnd(this.options.labelWidth ?? 26);
       const line = truncateToWidth(`${label}${this.renderValue(field)}`, width);
       out.push(index === this.focus ? this.highlight(line, width) : line);
       const warning = field.kind === "select" ? field.warning?.[field.value] : undefined;

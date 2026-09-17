@@ -8,15 +8,17 @@ Shared types live in `src/domain/types.ts` and are referenced below without repe
 export type ApiType = "openai-completions" | "openai-responses" | "anthropic-messages" | "google-generative-ai";
 export type TargetRef = `${string}/${string}`;                       // provider/modelId
 export type ErrorHandlingMode = "smart" | "switch" | "retry";
-export type TtftAction = "cooldown-only" | "abort";
-export type FailureClass = "cooldown" | "persistent" | "compat-retry";
+export type FailureClass = "cooldown" | "persistent" | "compat-retry" | "server-quality";
 export type FailoverReason = `http-${number}` | "network" | "ttft-timeout" | "no-progress" | "persistent" | "manual";
 export type ReasoningLevel = "off" | "low" | "medium" | "high" | "xhigh" | "max";
 export type ReasoningEffort = "inherit" | ReasoningLevel;
+export type ServerQualitySignal = "ttft" | "no-progress";
+export interface ServerQualitySettings { enabled: boolean; ttft: boolean; noProgress: boolean; }
+export type ServerQualityOverride = Partial<ServerQualitySettings>;
 
 export interface CatalogModel { id: string; name?: string; reasoning: boolean; vision: boolean; contextWindow: number; maxTokens: number; defaults: Record<string, unknown>; }
-export interface TargetSettings { errorHandlingMode: ErrorHandlingMode; maxRetries: number; reasoningEffort: ReasoningEffort; modelParameters: Record<string, unknown>; noProgressTimeoutSeconds: number; ttftTimeoutSeconds: number; ttftAction: TtftAction; }
-export interface Target extends Partial<TargetSettings> { provider: string; modelId: string; }
+export interface TargetSettings { errorHandlingMode: ErrorHandlingMode; maxRetries: number; reasoningEffort: ReasoningEffort; modelParameters: Record<string, unknown>; noProgressTimeoutSeconds: number; ttftTimeoutSeconds: number; serverQuality: ServerQualitySettings; }
+export interface Target extends Omit<Partial<TargetSettings>, "serverQuality"> { provider: string; modelId: string; serverQuality?: ServerQualityOverride; }
 export interface Chain { id: string; name: string; targets: Target[]; }
 export interface KeyGroup { id: string; prefix: string; template: { baseUrl: string; api: ApiType; headers: Record<string, string> }; createdAt: string; }
 export interface Settings extends TargetSettings { listRows: number; }   // reasoningEffort/modelParameters unused at global level
@@ -72,8 +74,8 @@ Dependencies: `FileSystem`, `WriteQueue`. Tests assert: missing file → default
 Responsibility: typed access to `config.json` (settings, catalog, key groups, chains).
 
 ```ts
-export interface ConfigFile { version: 1; settings: Settings; catalog: CatalogModel[]; keyGroups: KeyGroup[]; chains: Chain[]; }
-export const DEFAULT_SETTINGS: Settings;             // listRows 7, ttft 60/cooldown-only, maxRetries 5, smart, noProgress 90
+export interface ConfigFile { version: 2; settings: Settings; catalog: CatalogModel[]; keyGroups: KeyGroup[]; chains: Chain[]; }
+export const DEFAULT_SETTINGS: Settings;             // listRows 7, Server Quality enabled with TTFT/no-progress enabled, maxRetries 5, smart, timeouts 60/90
 export class ConfigStore {
   static open(fs: FileSystem, queue: WriteQueue, dir: string): Promise<ConfigStore>;
   get(): ConfigFile;                                  // in-memory snapshot
@@ -105,12 +107,12 @@ Dependencies: `FileSystem`, `Clock`, `WriteQueue`. Tests assert: lock acquired w
 Responsibility: ordered migration functions for `config.json` and `state.json`.
 
 ```ts
-export const CONFIG_VERSION = 1; export const STATE_VERSION = 1;
-export const configMigrations: Record<number, (raw: unknown) => unknown>;  // {} in v1
-export const stateMigrations: Record<number, (raw: unknown) => unknown>;   // {} in v1
+export const CONFIG_VERSION = 2; export const STATE_VERSION = 1;
+export const configMigrations: Record<number, (raw: unknown) => unknown>;  // v1 → v2 removes legacy ttftAction and preserves unknown fields
+export const stateMigrations: Record<number, (raw: unknown) => unknown>;   // no state migration in v2
 ```
 
-Tests assert: every integer in `1..VERSION-1` has an entry (vacuously true in v1).
+The v1-to-v2 migration supplies enabled global Server Quality defaults, removes global and Target `ttftAction`, and leaves Targets without invented overrides so they inherit.
 
 ---
 
@@ -125,6 +127,20 @@ export function redactFailureBody(body: string): string;  // redacts api-key/tok
 ```
 
 Tests assert: exact outputs for 4-, 8-, 40-char inputs; env refs untouched; header `Authorization` redacted, `X-Team` kept (C22).
+
+### `domain/serverQuality.ts`
+
+Responsibility: resolve global Server Quality policy with optional Target overrides and gate individual timer signals.
+
+```ts
+export type ServerQualitySettings = { enabled: boolean; ttft: boolean; noProgress: boolean };
+export type ServerQualityOverride = Partial<ServerQualitySettings>;
+export type ServerQualitySignal = "ttft" | "no-progress";
+export function resolveServerQuality(global: ServerQualitySettings, override?: ServerQualityOverride): ServerQualitySettings;
+export function isServerQualityEnabled(settings: ServerQualitySettings, signal: ServerQualitySignal): boolean;
+```
+
+Dependencies: none. `resolveServerQuality` returns a fresh complete policy and uses nullish override resolution, so explicit `false` values are preserved. `isServerQualityEnabled` requires both the master switch and the selected signal switch. Tests cover partial overrides, fresh results, and both gating conditions.
 
 ### `domain/catalog.ts`
 
@@ -212,7 +228,7 @@ export function virtualModelNode(c: Chain, m: ModelsJson): ModelNode | null;    
 export function resolveTargetSettings(t: Target, s: Settings): TargetSettings;
 ```
 
-Tests assert: `addTargets` rejects `failover/x`; P2 `dropProvider` tests remove only matching targets (C7 data half); `virtualModelNode` inherits `contextWindow`, `reasoning`, `input` and returns null for empty chain; `sameModelImport` order (C16).
+Tests assert: `addTargets` rejects `failover/x`; P2 `dropProvider` tests remove only matching targets (C7 data half); `virtualModelNode` inherits `contextWindow`, `reasoning`, `input` and returns null for empty chain; `sameModelImport` order (C16); `resolveTargetSettings` deep-resolves global Server Quality settings and optional Target overrides without mutating either input.
 
 ### `domain/failureClass.ts`
 
@@ -221,7 +237,7 @@ export interface FailureInput { status?: number; code?: string; body?: string; t
 export function classify(e: FailureInput): { cls: FailureClass; reason: FailoverReason; offendingParam?: string };
 ```
 
-Tests assert: table in `02-architecture.md` row by row; 400 body `"Unknown parameter: reasoning_effort"` → `compat-retry` with `offendingParam` (C15); 429 with `insufficient_quota` → persistent.
+Tests assert: the timer rows classify as `server-quality` while retaining `ttft-timeout` and `no-progress` reasons; the remaining table in `02-architecture.md` holds for HTTP, network, compatibility, and persistent failures; 400 body `"Unknown parameter: reasoning_effort"` → `compat-retry` with `offendingParam` (C15); 429 with `insufficient_quota` → persistent.
 
 ### `domain/cooldown.ts`
 
@@ -254,7 +270,7 @@ export interface EngineDeps {
 export function runChain(deps: EngineDeps, chain: Chain, settings: Settings, requestSeq: number, signal: AbortSignal): AsyncIterable<unknown>;
 ```
 
-`runChain` yields payloads from the winning attempt only; an aborted attempt's partial payloads are discarded. Dependencies: `failureClass`, `cooldown`, `chains`. Tests (fake `send`, fake clock) assert: C8, C9, C10, C11, C12, C15; all-excluded chain retries once ignoring cooldown; `switch` mode never retries; `retry` mode sleeps `backoffMs` and stops at `maxRetries`; every failure appends exactly one event with correct `from`/`to`.
+`runChain` resolves each Target's effective Server Quality policy from the request-start settings snapshot. Enabled positive-timeout signals race the stream; disabled signals do not start timers. Timer failures use class `server-quality` and the shared retry counter/backoff: `retry` retries them, `smart` retries them, and `switch` advances immediately. One cooldown state update and History event are written only after retry exhaustion (or immediately in `switch`); changing Targets resets the counter. `runChain` yields payloads from the winning attempt only, so an aborted attempt's partial payloads are discarded. Dependencies: `failureClass`, `cooldown`, `chains`. Tests (fake `send`, fake clock) assert C8–C12 and C15, policy snapshots, disabled timers, shared maxRetries/backoff, one event after exhaustion, and `switch` immediate advance.
 
 ---
 
@@ -366,6 +382,24 @@ Tests assert: 600 appends → 500 lines, newest kept (C17); malformed line count
 ## tui/
 
 All project components implement the project's `PiComponent` shape: `{ render(width: number): string[]; handleInput(data: string): void; invalidate?(): void; focused?: boolean }`. `createApp` may omit the optional `invalidate`. The installed `@earendil-works/pi-tui` `Component` contract requires `invalidate(): void`; before passing the app to `ui.custom`, `src/index.ts` supplies a wrapper with a required `invalidate` that delegates to the app's optional method. Rendering uses `truncateToWidth`, `visibleWidth`, `Key`, `matchesKey` from `@earendil-works/pi-tui`. Strings come from `src/strings.ts`.
+
+### `tui/footer.ts`
+
+Responsibility: maintain failover footer state and format the two native Pi status values without replacing Pi's Footer.
+
+```ts
+export type FallbackNotice = { from: TargetRef; to: TargetRef | null; reason: FailoverReason };
+export interface FooterState { currentTarget: TargetRef | null; latestFallback: FallbackNotice | null; }
+export interface FooterStatusValues { current: string; fallback: string; }
+export const FOOTER_STATUS_KEYS: { readonly current: "failover-current"; readonly fallback: "failover-fallback" };
+export const emptyFooterState: FooterState;
+export function createFooterState(): FooterState;
+export function updateCurrentTarget(state: FooterState, target: TargetRef): FooterState;
+export function updateFallback(state: FooterState, notice: FallbackNotice): FooterState;
+export function footerStatusValues(state: FooterState): FooterStatusValues;
+```
+
+Dependencies: `domain/types.ts` and `strings.ts`. State helpers return updated values without mutating the input. Current status uses the latest physical Target attempt; fallback status uses `provider/model <- reason`, while final (`to: null`) and `manual` notices leave the latest real fallback unchanged. `FOOTER_STATUS_KEYS` is consumed by `src/index.ts` through `ctx.ui.setStatus`; non-TUI registration remains guarded there. Tests cover empty placeholders, physical-attempt updates, fallback formatting, and retention rules.
 
 ### `tui/primitives/tabBar.ts`
 

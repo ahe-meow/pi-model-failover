@@ -66,7 +66,7 @@ const settings: Settings = {
   modelParameters: { temperature: 0.2, nested: { keep: true } },
   noProgressTimeoutSeconds: 90,
   ttftTimeoutSeconds: 60,
-  ttftAction: "cooldown-only",
+  serverQuality: { enabled: true, ttft: true, noProgress: true },
 };
 
 describe("chains", () => {
@@ -326,7 +326,7 @@ describe("chains", () => {
       modelParameters: { temperature: 0.8, nested: { keep: false } },
       noProgressTimeoutSeconds: 30,
       ttftTimeoutSeconds: 10,
-      ttftAction: "abort",
+      serverQuality: { enabled: false, noProgress: false },
     };
 
     const resolved = resolveTargetSettings(target, settings);
@@ -338,10 +338,10 @@ describe("chains", () => {
       modelParameters: { temperature: 0.8, nested: { keep: false } },
       noProgressTimeoutSeconds: 30,
       ttftTimeoutSeconds: 10,
-      ttftAction: "abort",
+      serverQuality: { enabled: false, ttft: true, noProgress: false },
     });
-    expect(resolved.modelParameters).not.toBe(target.modelParameters);
     expect(resolved.modelParameters.nested).not.toBe(target.modelParameters?.nested);
+    expect(resolved.serverQuality).not.toBe(target.serverQuality);
 
     const inherited = resolveTargetSettings({ provider: "a", modelId: "m" }, settings);
     expect(inherited).toEqual({
@@ -351,10 +351,11 @@ describe("chains", () => {
       modelParameters: { temperature: 0.2, nested: { keep: true } },
       noProgressTimeoutSeconds: 90,
       ttftTimeoutSeconds: 60,
-      ttftAction: "cooldown-only",
+      serverQuality: { enabled: true, ttft: true, noProgress: true },
     });
     expect(inherited.modelParameters).not.toBe(settings.modelParameters);
     expect(inherited.modelParameters.nested).not.toBe(settings.modelParameters.nested);
+    expect(inherited.serverQuality).not.toBe(settings.serverQuality);
   });
 
   it("rewrites only the renamed provider reference and preserves target settings", () => {

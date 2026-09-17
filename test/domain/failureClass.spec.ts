@@ -17,8 +17,8 @@ describe("classify", () => {
     [{ code: "ECONNRESET" }, "cooldown", "network"],
     [{ code: "ENOTFOUND" }, "cooldown", "network"],
     [{ code: "ETIMEDOUT" }, "cooldown", "network"],
-    [{ timer: "ttft" }, "cooldown", "ttft-timeout"],
-    [{ timer: "no-progress" }, "cooldown", "no-progress"],
+    [{ timer: "ttft" }, "server-quality", "ttft-timeout"],
+    [{ timer: "no-progress" }, "server-quality", "no-progress"],
     [{ status: 418 }, "cooldown", "http-418"],
     [{}, "cooldown", "network"],
   ] as const)("classifies %j", (input, cls, reason) => {
@@ -76,7 +76,7 @@ describe("classify", () => {
         body: "Unknown parameter: temperature quota",
         sentParams: ["temperature"],
       }),
-    ).toEqual({ cls: "cooldown", reason: "ttft-timeout" });
+    ).toEqual({ cls: "server-quality", reason: "ttft-timeout" });
   });
 
   it("applies persistent status precedence over network codes", () => {

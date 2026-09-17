@@ -32,7 +32,7 @@ const settings = (overrides: Partial<Settings> = {}): Settings => ({
   modelParameters: { temperature: 0.2 },
   noProgressTimeoutSeconds: 90,
   ttftTimeoutSeconds: 60,
-  ttftAction: "cooldown-only",
+  serverQuality: { enabled: true, ttft: true, noProgress: true },
   ...overrides,
 });
 const target = (provider: string, overrides: Partial<Target> = {}): Target => ({
@@ -41,9 +41,9 @@ const target = (provider: string, overrides: Partial<Target> = {}): Target => ({
   ...overrides,
 });
 const chainOf = (...targets: Target[]): Chain => ({ id: "coding", name: "Coding", targets });
+const chainABC = chainOf(target("a"), target("b"), target("c"));
 const chainAB = (a: Partial<Target> = {}, b: Partial<Target> = {}): Chain =>
   chainOf(target("a", a), target("b", b));
-const chainABC = chainOf(target("a"), target("b"), target("c"));
 const signal = new AbortController().signal;
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
@@ -108,8 +108,6 @@ function gatedAttempt(mode: GateMode, payload: unknown): ControlledAttempt {
 }
 const waitBeforeMeaningful = (payload: unknown): ControlledAttempt =>
   gatedAttempt("before", payload);
-const waitAfterNonmeaningful = (payload: unknown): ControlledAttempt =>
-  gatedAttempt("after-nonmeaningful", payload);
 const waitAfterMeaningful = (payload: unknown): ControlledAttempt =>
   gatedAttempt("after-meaningful", payload);
 const pendingAttempt = (): ControlledAttempt => gatedAttempt("only", undefined);
@@ -242,61 +240,41 @@ describe("runChain", () => {
     expect(history[0]?.error).toEqual({ status: 401 });
     expect(deps.state.snapshot()["a/m"]?.manualRecovery).toBe(true);
   });
-  it("C10: cooldown-only TTFT lets A finish and cools it for the next request", async () => {
+  it("disabled TTFT continues the provider stream without failover", async () => {
     const clock = new ObservableClock();
     const first = waitBeforeMeaningful("from-a");
     const history: FailoverEvent[] = [];
-    const sent: string[] = [];
     const deps = makeEngine({
       clock,
       history,
-      send: async (ref) => {
-        sent.push(ref);
-        return ref === "a/m" ? first.attempt : successfulAttempt("from-b");
-      },
+      send: async (ref) => (ref === "a/m" ? first.attempt : successfulAttempt("from-b")),
     });
-    const running = collect(runChain(deps.deps, chainAB(), settings(), 3, signal));
-    await waitFor(() => clock.sleeps.includes(60_000));
-    clock.advance(60_000);
+    const running = collect(
+      runChain(deps.deps, chainAB({ serverQuality: { ttft: false } }), settings(), 3, signal),
+    );
+    await waitFor(() => deps.state.reads === 1);
+    expect(clock.sleeps).not.toContain(60_000);
     first.release();
-
     await expect(running).resolves.toEqual(["from-a", "done"]);
-    expect(sent).toEqual(["a/m"]);
-    expect(history).toHaveLength(1);
-    expect(history[0]).toMatchObject({ from: "a/m", to: "b/m", reason: "ttft-timeout" });
-    expect(history[0]).not.toHaveProperty("error");
-    expect(deps.state.snapshot()["a/m"]?.cooldownUntil).toBe(new Date(120_000).toISOString());
+    expect(history).toHaveLength(0);
   });
-  it("C11: abort TTFT discards A partial output and B wins in the same request", async () => {
+  it("disabled no-progress continues the provider stream without failover", async () => {
     const clock = new ObservableClock();
-    const first = waitAfterNonmeaningful("partial-from-a");
-    const sent: string[] = [];
+    const first = waitAfterMeaningful("partial-from-a");
     const history: FailoverEvent[] = [];
     const deps = makeEngine({
       clock,
       history,
-      send: async (ref) => {
-        sent.push(ref);
-        return ref === "a/m" ? first.attempt : successfulAttempt("from-b");
-      },
+      send: async (ref) => (ref === "a/m" ? first.attempt : successfulAttempt("from-b")),
     });
     const running = collect(
-      runChain(
-        deps.deps,
-        chainAB({ ttftAction: "abort" }),
-        settings(),
-        4,
-        new AbortController().signal,
-      ),
+      runChain(deps.deps, chainAB({ serverQuality: { noProgress: false } }), settings(), 4, signal),
     );
-    await waitFor(() => clock.sleeps.includes(60_000));
-    clock.advance(60_000);
-
-    await expect(running).resolves.toEqual(["from-b"]);
-    expect(first.aborts()).toBe(1);
-    expect(sent).toEqual(["a/m", "b/m"]);
-    expect(history).toHaveLength(1);
-    expect(history[0]).toMatchObject({ from: "a/m", to: "b/m", reason: "ttft-timeout" });
+    await waitFor(() => deps.state.reads === 1);
+    expect(clock.sleeps).not.toContain(90_000);
+    first.release();
+    await expect(running).resolves.toEqual(["partial-from-a", "done"]);
+    expect(history).toHaveLength(0);
   });
   it("records the real HTTP reason and normalized error detail for a persistent failure", async () => {
     const history: FailoverEvent[] = [];
@@ -307,11 +285,9 @@ describe("runChain", () => {
           ? throwingAttempt({ status: 401, code: "invalid_api_key", body: "invalid api key" })
           : successfulAttempt("from-b"),
     });
-
     await expect(collect(runChain(deps.deps, chainAB(), settings(), 21, signal))).resolves.toEqual([
       "from-b",
     ]);
-
     expect(history[0]).toMatchObject({
       from: "a/m",
       to: "b/m",
@@ -329,117 +305,136 @@ describe("runChain", () => {
           ? throwingAttempt({ status: 503, body: "upstream rejected api_key=abcdefgh" })
           : successfulAttempt("from-b"),
     });
-
     await collect(runChain(deps.deps, chainAB(), settings(), 22, signal));
-
     expect(history[0]?.error?.body).toBe("upstream rejected api_key=abc…efgh");
   });
-  it("C12: no-progress aborts after the first meaningful delta", async () => {
-    const clock = new ObservableClock();
-    const first = waitAfterMeaningful("partial-from-a");
-    const history: FailoverEvent[] = [];
+  it.each(["smart", "retry"] as const)(
+    "%s retries server-quality failures with the shared budget and backoff",
+    async (mode) => {
+      for (const makeAttempt of [
+        () => waitBeforeMeaningful("timed-out"),
+        () => waitAfterMeaningful("stalled"),
+      ]) {
+        const clock = new AdvancingClock();
+        const sent: string[] = [];
+        const history: FailoverEvent[] = [];
+        let aAttempts = 0;
+        const deps = makeEngine({
+          clock,
+          history,
+          send: async (ref) => {
+            sent.push(ref);
+            if (ref !== "a/m") return successfulAttempt("from-b");
+            if (aAttempts++ < 2) return makeAttempt().attempt;
+            return successfulAttempt("recovered-a");
+          },
+        });
+        await expect(
+          collect(
+            runChain(
+              deps.deps,
+              chainOf(target("a", { errorHandlingMode: mode, maxRetries: 2 })),
+              settings(),
+              14,
+              signal,
+            ),
+          ),
+        ).resolves.toEqual(["recovered-a"]);
+        expect(sent).toEqual(["a/m", "a/m", "a/m"]);
+        expect(clock.sleeps.filter((ms) => ms < 60_000)).toEqual([1_000, 2_000]);
+        expect(history).toHaveLength(0);
+      }
+    },
+  );
+  it("records one exhausted TTFT event and enters cooldown", async () => {
+    const clock = new AdvancingClock();
     const sent: string[] = [];
+    const history: FailoverEvent[] = [];
     const deps = makeEngine({
       clock,
       history,
       send: async (ref) => {
         sent.push(ref);
-        return ref === "a/m" ? first.attempt : successfulAttempt("from-b");
-      },
-    });
-    const running = collect(
-      runChain(deps.deps, chainAB(), settings(), 5, new AbortController().signal),
-    );
-    await waitFor(() => clock.sleeps.filter((ms) => ms === 90_000).length === 1);
-    clock.advance(90_000);
-
-    await expect(running).resolves.toEqual(["from-b"]);
-    expect(first.aborts()).toBe(1);
-    expect(sent).toEqual(["a/m", "b/m"]);
-    expect(history).toHaveLength(1);
-    expect(history[0]).toMatchObject({ from: "a/m", to: "b/m", reason: "no-progress" });
-    expect(history[0]).not.toHaveProperty("error");
-  });
-  it("retry mode advances after timer failure without backoff", async () => {
-    for (const [first, targetOptions, reason] of [
-      [
-        waitAfterNonmeaningful("partial-from-a"),
-        { ttftAction: "abort" as const },
-        "ttft-timeout" as const,
-      ],
-      [
-        waitAfterMeaningful("partial-from-a"),
-        { ttftTimeoutSeconds: 0, ttftAction: "abort" as const },
-        "no-progress" as const,
-      ],
-    ] as const) {
-      const clock = new AdvancingClock();
-      const sent: string[] = [];
-      const history: FailoverEvent[] = [];
-      let aAttempts = 0;
-      const deps = makeEngine({
-        clock,
-        history,
-        send: async (ref) => {
-          sent.push(ref);
-          if (ref !== "a/m") return successfulAttempt("from-b");
-          return aAttempts++ === 0 ? first.attempt : successfulAttempt("wrong-a");
-        },
-      });
-      await expect(
-        collect(
-          runChain(
-            deps.deps,
-            chainAB({ ...targetOptions, errorHandlingMode: "retry", maxRetries: 1 }),
-            settings(),
-            14,
-            new AbortController().signal,
-          ),
-        ),
-      ).resolves.toEqual(["from-b"]);
-      expect(sent).toEqual(["a/m", "b/m"]);
-      expect(clock.sleeps).not.toContain(1_000);
-      expect(history).toHaveLength(1);
-      expect(history[0]).toMatchObject({ from: "a/m", to: "b/m", reason });
-    }
-  });
-  it("C15: compatibility retry strips one parameter without state or history", async () => {
-    const stripped: string[][] = [];
-    const settingsSeen: Settings[] = [];
-    let sends = 0;
-    const history: FailoverEvent[] = [];
-    const deps = makeEngine({
-      history,
-      send: async (ref, targetSettings, parameters) => {
-        expect(ref).toBe("a/m");
-        settingsSeen.push(structuredClone(targetSettings) as Settings);
-        stripped.push([...parameters]);
-        sends++;
-        return sends === 1
-          ? throwingAttempt({
-              status: 400,
-              body: "Unknown parameter: temperature",
-              sentParams: ["temperature"],
-            })
-          : successfulAttempt("from-a");
+        return ref === "a/m"
+          ? waitBeforeMeaningful("timed-out").attempt
+          : successfulAttempt("from-b");
       },
     });
     await expect(
       collect(
         runChain(
           deps.deps,
-          chainOf(
-            target("a", { errorHandlingMode: "switch", modelParameters: { temperature: 0.8 } }),
-          ),
+          chainAB({ errorHandlingMode: "retry", maxRetries: 2 }),
           settings(),
-          6,
-          new AbortController().signal,
+          15,
+          signal,
         ),
       ),
-    ).resolves.toEqual(["from-a"]);
-    expect(stripped).toEqual([[], ["temperature"]]);
-    expect(settingsSeen[0]?.modelParameters).toEqual({ temperature: 0.8 });
-    expect(history).toHaveLength(0);
+    ).resolves.toEqual(["from-b"]);
+    expect(sent).toEqual(["a/m", "a/m", "a/m", "b/m"]);
+    expect(clock.sleeps.filter((ms) => ms < 60_000)).toEqual([1_000, 2_000]);
+    expect(history).toHaveLength(1);
+    expect(history[0]).toMatchObject({ from: "a/m", to: "b/m", reason: "ttft-timeout" });
+    expect(deps.state.snapshot()["a/m"]?.cooldownLevel).toBe(1);
+  });
+  it("switch advances immediately after a TTFT failure", async () => {
+    const clock = new AdvancingClock();
+    const sent: string[] = [];
+    const history: FailoverEvent[] = [];
+    const deps = makeEngine({
+      clock,
+      history,
+      send: async (ref) => {
+        sent.push(ref);
+        return ref === "a/m"
+          ? waitBeforeMeaningful("timed-out").attempt
+          : successfulAttempt("from-b");
+      },
+    });
+    await expect(
+      collect(
+        runChain(
+          deps.deps,
+          chainAB({ errorHandlingMode: "switch", maxRetries: 8 }),
+          settings(),
+          16,
+          signal,
+        ),
+      ),
+    ).resolves.toEqual(["from-b"]);
+    expect(sent).toEqual(["a/m", "b/m"]);
+    expect(clock.sleeps.filter((ms) => ms < 60_000)).toEqual([]);
+    expect(history).toHaveLength(1);
+  });
+  it("resets the retry budget after switching targets", async () => {
+    const clock = new AdvancingClock();
+    const sent: string[] = [];
+    const history: FailoverEvent[] = [];
+    const deps = makeEngine({
+      clock,
+      history,
+      send: async (ref) => {
+        sent.push(ref);
+        return waitBeforeMeaningful("timed-out").attempt;
+      },
+    });
+    const stream = collect(
+      runChain(
+        deps.deps,
+        chainOf(
+          target("a", { errorHandlingMode: "retry", maxRetries: 1 }),
+          target("b", { errorHandlingMode: "retry", maxRetries: 1 }),
+        ),
+        settings(),
+        18,
+        signal,
+      ),
+    );
+    await expect(stream).rejects.toMatchObject({ timer: "ttft" });
+    expect(sent).toEqual(["a/m", "a/m", "b/m", "b/m"]);
+    expect(clock.sleeps.filter((ms) => ms < 60_000)).toEqual([1_000, 1_000]);
+    expect(history).toHaveLength(2);
+    expect(history.map(({ from }) => from)).toEqual(["a/m", "b/m"]);
   });
   it("makes one cooldown-ignoring pass over all-excluded targets and honors Manual Recovery", async () => {
     const now = 0;
@@ -492,37 +487,43 @@ describe("runChain", () => {
     expect(sent).toEqual(["a/m", "b/m"]);
     expect(history).toHaveLength(1);
   });
-  it("retry sleeps with capped backoff and records one event after retries are exhausted", async () => {
-    const clock = new AdvancingClock();
-    const sent: string[] = [];
+  it("C15: compatibility retry strips one parameter without state or history", async () => {
+    const stripped: string[][] = [];
+    const settingsSeen: Settings[] = [];
+    let sends = 0;
     const history: FailoverEvent[] = [];
-    let failures = 0;
     const deps = makeEngine({
-      clock,
       history,
-      send: async (ref) => {
-        sent.push(ref);
-        if (ref === "a/m" && failures++ < 13) return throwingAttempt({ status: 503 });
-        return successfulAttempt("from-b");
+      send: async (ref, targetSettings, parameters) => {
+        expect(ref).toBe("a/m");
+        settingsSeen.push(structuredClone(targetSettings) as Settings);
+        stripped.push([...parameters]);
+        sends++;
+        return sends === 1
+          ? throwingAttempt({
+              status: 400,
+              body: "Unknown parameter: temperature",
+              sentParams: ["temperature"],
+            })
+          : successfulAttempt("from-a");
       },
     });
     await expect(
       collect(
         runChain(
           deps.deps,
-          chainAB({ errorHandlingMode: "retry", maxRetries: 12 }),
-          settings({ ttftTimeoutSeconds: 0, noProgressTimeoutSeconds: 0 }),
-          10,
+          chainOf(
+            target("a", { errorHandlingMode: "switch", modelParameters: { temperature: 0.8 } }),
+          ),
+          settings(),
+          6,
           new AbortController().signal,
         ),
       ),
-    ).resolves.toEqual(["from-b"]);
-    expect(sent).toEqual([...Array.from({ length: 13 }, () => "a/m"), "b/m"]);
-    expect(clock.sleeps).toEqual([
-      1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000, 60_000, 60_000, 60_000, 60_000,
-    ]);
-    expect(history).toHaveLength(1);
-    expect(deps.state.updates).toBe(2);
+    ).resolves.toEqual(["from-a"]);
+    expect(stripped).toEqual([[], ["temperature"]]);
+    expect(settingsSeen[0]?.modelParameters).toEqual({ temperature: 0.8 });
+    expect(history).toHaveLength(0);
   });
   it("smart retries network failures but switches on HTTP 5xx", async () => {
     const retried: string[] = [];

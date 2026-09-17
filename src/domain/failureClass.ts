@@ -51,8 +51,8 @@ function namesParameter(body: string, parameter: string): boolean {
 export function classify(e: FailureInput): Classification {
   const { body, status } = e;
 
-  if (e.timer === "ttft") return { cls: "cooldown", reason: "ttft-timeout" };
-  if (e.timer === "no-progress") return { cls: "cooldown", reason: "no-progress" };
+  if (e.timer === "ttft") return { cls: "server-quality", reason: "ttft-timeout" };
+  if (e.timer === "no-progress") return { cls: "server-quality", reason: "no-progress" };
 
   if (status !== undefined && PERSISTENT_STATUSES.has(status)) {
     return { cls: "persistent", reason: httpReason(status) };

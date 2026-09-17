@@ -5,7 +5,7 @@ import { CONFIG_VERSION, configMigrations } from "./migrations.js";
 import type { WriteQueue } from "./writeQueue.js";
 
 export interface ConfigFile {
-  version: 1;
+  version: 2;
   settings: Settings;
   catalog: CatalogModel[];
   keyGroups: KeyGroup[];
@@ -16,7 +16,7 @@ export interface ConfigFile {
 export const DEFAULT_SETTINGS: Settings = {
   listRows: 7,
   ttftTimeoutSeconds: 60,
-  ttftAction: "cooldown-only",
+  serverQuality: { enabled: true, ttft: true, noProgress: true },
   maxRetries: 5,
   errorHandlingMode: "smart",
   noProgressTimeoutSeconds: 90,
@@ -27,13 +27,42 @@ export const DEFAULT_SETTINGS: Settings = {
 export const LIST_ROWS_MIN = 5;
 export const LIST_ROWS_MAX = 20;
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
 const defaults = (): ConfigFile => ({
-  version: 1,
-  settings: { ...DEFAULT_SETTINGS },
+  version: CONFIG_VERSION,
+  settings: {
+    ...DEFAULT_SETTINGS,
+    serverQuality: { ...DEFAULT_SETTINGS.serverQuality },
+    modelParameters: {},
+  },
   catalog: [],
   keyGroups: [],
   chains: [],
 });
+
+function normalizeSettings(value: unknown): Settings {
+  const raw = isRecord(value) ? value : {};
+  return {
+    ...DEFAULT_SETTINGS,
+    ...raw,
+    serverQuality: {
+      ...DEFAULT_SETTINGS.serverQuality,
+      ...(isRecord(raw.serverQuality) ? raw.serverQuality : {}),
+    },
+  } as Settings;
+}
+
+function normalize(value: ConfigFile): ConfigFile {
+  const raw: Record<string, unknown> = isRecord(value) ? value : {};
+  return {
+    ...defaults(),
+    ...raw,
+    version: CONFIG_VERSION,
+    settings: normalizeSettings(raw.settings),
+  } as ConfigFile;
+}
 
 function validate(config: ConfigFile): void {
   const rows = config.settings.listRows;
@@ -59,15 +88,9 @@ export class ConfigStore {
       migrations: configMigrations,
     });
     const { value, status } = await store.load();
-    return new ConfigStore(
-      store,
-      {
-        ...defaults(),
-        ...value,
-        settings: { ...DEFAULT_SETTINGS, ...value.settings },
-      },
-      status,
-    );
+    const normalized = normalize(value);
+    if (status === "migrated") await store.save(normalized);
+    return new ConfigStore(store, normalized, status);
   }
 
   get(): ConfigFile {

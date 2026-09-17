@@ -10,6 +10,7 @@ import {
 import { classify, type FailureInput } from "./failureClass.js";
 import type { Clock } from "./ports.js";
 import { redactFailureBody } from "./redact.js";
+import { isServerQualityEnabled } from "./serverQuality.js";
 import type {
   Chain,
   FailoverErrorDetails,
@@ -32,7 +33,7 @@ export interface StreamChunk {
   payload: unknown;
   done?: boolean;
 }
-
+export type FallbackNotice = { from: TargetRef; to: TargetRef | null; reason: FailoverReason };
 export interface EngineDeps {
   send(
     target: TargetRef,
@@ -47,8 +48,9 @@ export interface EngineDeps {
   history: { append(event: FailoverEvent): Promise<void> };
   clock: Clock;
   sessionId: string;
+  onTargetAttempt?: (target: TargetRef) => void;
+  onFallback?: (notice: FallbackNotice) => void;
 }
-
 type Candidate = { ref: TargetRef; target: Target; index: number };
 type TimerKind = "ttft" | "no-progress";
 type NextResult =
@@ -60,8 +62,8 @@ type RaceResult =
   | { kind: "cancelled-timer" }
   | { kind: "parent" };
 type AttemptResult =
-  | { kind: "success"; payloads: unknown[]; pendingCooldown: boolean }
-  | { kind: "failure"; error: unknown; input: FailureInput; pendingCooldown: boolean }
+  | { kind: "success"; payloads: unknown[] }
+  | { kind: "failure"; error: unknown; input: FailureInput }
   | { kind: "cancelled" };
 type ActiveTimer = { controller: AbortController; promise: Promise<RaceResult> };
 
@@ -77,7 +79,9 @@ function abortError(): Error {
 function safeAbort(attempt: Attempt): void {
   try {
     attempt.abort();
-  } catch {}
+  } catch {
+    return;
+  }
 }
 
 function asFailure(value: unknown, fallbackParams: string[]): FailureInput {
@@ -140,7 +144,7 @@ function raceWithAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> 
 function timerFailure(attempt: Attempt, timer: TimerKind, stripped: string[]): AttemptResult {
   safeAbort(attempt);
   const failure: FailureInput = { timer, sentParams: [...stripped] };
-  return { kind: "failure", error: failure, input: failure, pendingCooldown: false };
+  return { kind: "failure", error: failure, input: failure };
 }
 
 async function consumeAttempt(
@@ -153,7 +157,6 @@ async function consumeAttempt(
   if (signal.aborted) return { kind: "cancelled" };
   const iterator = attempt.events[Symbol.asyncIterator]();
   const payloads: unknown[] = [];
-  let pendingCooldown = false;
   let activeTimer: ActiveTimer | undefined;
   const stopTimer = () => {
     activeTimer?.controller.abort();
@@ -170,7 +173,9 @@ async function consumeAttempt(
   });
   const onParentAbort = () => resolveParent();
   signal.addEventListener("abort", onParentAbort, { once: true });
-  startTimer("ttft", settings.ttftTimeoutSeconds * 1_000);
+  if (isServerQualityEnabled(settings.serverQuality, "ttft")) {
+    startTimer("ttft", settings.ttftTimeoutSeconds * 1_000);
+  }
 
   try {
     let next = nextResult(iterator);
@@ -186,10 +191,6 @@ async function consumeAttempt(
       }
       if (result.kind === "timer") {
         activeTimer = undefined;
-        if (result.timer === "ttft" && settings.ttftAction === "cooldown-only") {
-          pendingCooldown = true;
-          continue;
-        }
         return timerFailure(attempt, result.timer, stripped);
       }
       if (result.kind === "error") {
@@ -199,16 +200,17 @@ async function consumeAttempt(
               kind: "failure",
               error: result.error,
               input: asFailure(result.error, stripped),
-              pendingCooldown,
             };
       }
-      if (result.result.done) return { kind: "success", payloads, pendingCooldown };
+      if (result.result.done) return { kind: "success", payloads };
       const chunk = result.result.value;
       payloads.push(chunk.payload);
-      if (chunk.done) return { kind: "success", payloads, pendingCooldown };
+      if (chunk.done) return { kind: "success", payloads };
       if (chunk.meaningful) {
         stopTimer();
-        startTimer("no-progress", settings.noProgressTimeoutSeconds * 1_000);
+        if (isServerQualityEnabled(settings.serverQuality, "no-progress")) {
+          startTimer("no-progress", settings.noProgressTimeoutSeconds * 1_000);
+        }
       }
       next = nextResult(iterator);
     }
@@ -256,16 +258,21 @@ async function recordFailure(
     elapsedMs: Math.max(0, now - startedAt),
     ...(details === undefined ? {} : { error: details }),
   });
+  deps.onFallback?.({ from: ref, to, reason });
 }
-
 function shouldRetry(
   mode: TargetSettings["errorHandlingMode"],
+  cls: ReturnType<typeof classify>["cls"],
   reason: FailoverReason,
   retries: number,
   maxRetries: number,
 ): boolean {
   if (retries >= Math.max(0, maxRetries)) return false;
-  return mode === "retry" || (mode === "smart" && (reason === "network" || reason === "http-429"));
+  return (
+    mode === "retry" ||
+    (mode === "smart" &&
+      (cls === "server-quality" || reason === "network" || reason === "http-429"))
+  );
 }
 
 async function waitForRetry(
@@ -310,9 +317,9 @@ export async function* runChain(
       input?: FailureInput,
     ) => recordFailure(deps, candidate.ref, to, reason, persistent, requestSeq, startedAt, input);
     let retries = 0;
-
     while (true) {
       if (signal.aborted) throw abortError();
+      deps.onTargetAttempt?.(candidate.ref);
       const controller = new AbortController();
       let attempt: Attempt | undefined;
       const onParentAbort = () => {
@@ -338,7 +345,7 @@ export async function* runChain(
       } catch (error) {
         outcome = signal.aborted
           ? { kind: "cancelled" }
-          : { kind: "failure", error, input: asFailure(error, stripped), pendingCooldown: false };
+          : { kind: "failure", error, input: asFailure(error, stripped) };
       } finally {
         signal.removeEventListener("abort", onParentAbort);
         controller.abort();
@@ -346,13 +353,9 @@ export async function* runChain(
 
       if (outcome.kind === "cancelled") throw abortError();
       if (outcome.kind === "success") {
-        if (outcome.pendingCooldown) {
-          await record("ttft-timeout");
-        } else {
-          await deps.state.update((targets) => {
-            targets[candidate.ref] = applySuccess(targets[candidate.ref] ?? reset());
-          });
-        }
+        await deps.state.update((targets) => {
+          targets[candidate.ref] = applySuccess(targets[candidate.ref] ?? reset());
+        });
         if (signal.aborted) throw abortError();
         for (const payload of outcome.payloads) yield payload;
         return;
@@ -360,20 +363,13 @@ export async function* runChain(
 
       lastError = outcome.error;
       let classification = classify(outcome.input);
-      if (outcome.pendingCooldown) {
-        await record("ttft-timeout");
-        break;
-      }
       if (classification.cls === "compat-retry" && classification.offendingParam !== undefined) {
         if (!stripped.includes(classification.offendingParam)) {
           stripped.push(classification.offendingParam);
           continue;
         }
+        // A repeated compatibility rejection is treated as an ordinary cooldown failure.
         classification = { cls: "cooldown", reason: classification.reason };
-      }
-      if (outcome.input.timer !== undefined) {
-        await record(classification.reason);
-        break;
       }
       if (classification.cls === "persistent") {
         await record(classification.reason, true, nextRef, outcome.input);
@@ -382,6 +378,7 @@ export async function* runChain(
       if (
         shouldRetry(
           targetSettings.errorHandlingMode,
+          classification.cls,
           classification.reason,
           retries,
           targetSettings.maxRetries,

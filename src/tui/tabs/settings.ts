@@ -1,7 +1,8 @@
 import { Key, type KeyId, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 import type { ConfigStore } from "../../config/configStore.js";
 import { LIST_ROWS_MAX, LIST_ROWS_MIN } from "../../config/configStore.js";
-import type { ErrorHandlingMode, TtftAction } from "../../domain/types.js";
+import type { ServerQualitySettings } from "../../domain/serverQuality.js";
+import type { ErrorHandlingMode } from "../../domain/types.js";
 import { S } from "../../strings.js";
 import { Confirm } from "../primitives/confirm.js";
 import { type Field, Form } from "../primitives/form.js";
@@ -15,15 +16,12 @@ function isKey(data: string, key: KeyId): boolean {
 const SETTING_KEYS = {
   listRows: "listRows",
   ttftTimeoutSeconds: "ttftTimeoutSeconds",
-  ttftAction: "ttftAction",
+  serverQualityEnabled: "serverQualityEnabled",
+  serverQualityTtft: "serverQualityTtft",
+  serverQualityNoProgress: "serverQualityNoProgress",
   maxRetries: "maxRetries",
   errorHandlingMode: "errorHandlingMode",
   noProgressTimeoutSeconds: "noProgressTimeoutSeconds",
-} as const;
-
-const TTFT_ACTION_VALUES = {
-  cooldownOnly: "cooldown-only",
-  abort: "abort",
 } as const;
 
 const ERROR_HANDLING_MODE_VALUES = {
@@ -32,10 +30,14 @@ const ERROR_HANDLING_MODE_VALUES = {
   retry: "retry",
 } as const;
 
-function ttftActionLabel(value: TtftAction): string {
-  return value === TTFT_ACTION_VALUES.abort
-    ? S.settings.options.ttftAction.abort
-    : S.settings.options.ttftAction.cooldownOnly;
+type QualityKey = "enabled" | "ttft" | "noProgress";
+
+function qualityLabel(value: boolean): string {
+  return value ? S.settings.options.serverQuality.on : S.settings.options.serverQuality.off;
+}
+
+function qualityValue(value: unknown): boolean {
+  return value === S.settings.options.serverQuality.on;
 }
 
 function errorHandlingModeLabel(value: ErrorHandlingMode): string {
@@ -51,12 +53,6 @@ function errorHandlingModeLabel(value: ErrorHandlingMode): string {
   }
 }
 
-function ttftActionValue(value: unknown): TtftAction {
-  return value === S.settings.options.ttftAction.abort
-    ? TTFT_ACTION_VALUES.abort
-    : TTFT_ACTION_VALUES.cooldownOnly;
-}
-
 function errorHandlingModeValue(value: unknown): ErrorHandlingMode {
   if (value === S.settings.options.errorHandlingMode.switch) {
     return ERROR_HANDLING_MODE_VALUES.switch;
@@ -67,10 +63,37 @@ function errorHandlingModeValue(value: unknown): ErrorHandlingMode {
   return ERROR_HANDLING_MODE_VALUES.smart;
 }
 
+function qualityDisabled(settings: ServerQualitySettings): boolean {
+  return !settings.enabled || (!settings.ttft && !settings.noProgress);
+}
+
+function qualityField(
+  key: string,
+  label: string,
+  qualityKey: QualityKey,
+  settings: ServerQualitySettings,
+): Field {
+  const warning = qualityDisabled(settings)
+    ? {
+        [S.settings.options.serverQuality.on]: S.serverQualityDisabledWarning,
+        [S.settings.options.serverQuality.off]: S.serverQualityDisabledWarning,
+      }
+    : undefined;
+  return {
+    kind: "select",
+    key,
+    label,
+    value: qualityLabel(settings[qualityKey]),
+    options: [S.settings.options.serverQuality.on, S.settings.options.serverQuality.off],
+    ...(warning === undefined || qualityKey !== "enabled" ? {} : { warning }),
+  };
+}
+
 export class SettingsTab implements TabComponent {
   private form: Form;
   private confirm: Confirm | null = null;
   private onReset = false;
+  private labelWidth = 26;
   private pendingSave: Promise<void> | undefined;
 
   constructor(
@@ -103,14 +126,24 @@ export class SettingsTab implements TabComponent {
         min: 0,
         max: 3600,
       },
-      {
-        kind: "select",
-        key: SETTING_KEYS.ttftAction,
-        label: S.settings.labels.ttftAction,
-        value: ttftActionLabel(settings[SETTING_KEYS.ttftAction]),
-        options: [S.settings.options.ttftAction.cooldownOnly, S.settings.options.ttftAction.abort],
-        warning: { [S.settings.options.ttftAction.abort]: S.abortWarning },
-      },
+      qualityField(
+        SETTING_KEYS.serverQualityEnabled,
+        S.settings.labels.serverQualityEnabled,
+        "enabled",
+        settings.serverQuality,
+      ),
+      qualityField(
+        SETTING_KEYS.serverQualityTtft,
+        S.settings.labels.serverQualityTtft,
+        "ttft",
+        settings.serverQuality,
+      ),
+      qualityField(
+        SETTING_KEYS.serverQualityNoProgress,
+        S.settings.labels.serverQualityNoProgress,
+        "noProgress",
+        settings.serverQuality,
+      ),
       {
         kind: "number",
         key: SETTING_KEYS.maxRetries,
@@ -139,13 +172,21 @@ export class SettingsTab implements TabComponent {
         max: 3600,
       },
     ];
+    const labelWidth = Math.max(...fields.map(({ label }) => label.length)) + 4;
+    this.labelWidth = labelWidth;
     return new Form(
       fields,
       (values) => {
         this.pendingSave = this.save(values);
       },
       () => {},
+      { labelWidth },
     );
+  }
+
+  private renderHeader(width: number): string {
+    const [setting = "", value = ""] = S.settings.tableHeader.split(/\s{2,}/);
+    return truncateToWidth(theme.header(`${setting.padEnd(this.labelWidth)}${value}`), width);
   }
 
   private async save(values: Record<string, unknown>): Promise<void> {
@@ -155,7 +196,13 @@ export class SettingsTab implements TabComponent {
         config.settings[SETTING_KEYS.ttftTimeoutSeconds] = values[
           SETTING_KEYS.ttftTimeoutSeconds
         ] as number;
-        config.settings[SETTING_KEYS.ttftAction] = ttftActionValue(values[SETTING_KEYS.ttftAction]);
+        config.settings.serverQuality.enabled = qualityValue(
+          values[SETTING_KEYS.serverQualityEnabled],
+        );
+        config.settings.serverQuality.ttft = qualityValue(values[SETTING_KEYS.serverQualityTtft]);
+        config.settings.serverQuality.noProgress = qualityValue(
+          values[SETTING_KEYS.serverQualityNoProgress],
+        );
         config.settings[SETTING_KEYS.maxRetries] = values[SETTING_KEYS.maxRetries] as number;
         config.settings[SETTING_KEYS.errorHandlingMode] = errorHandlingModeValue(
           values[SETTING_KEYS.errorHandlingMode],
@@ -171,9 +218,14 @@ export class SettingsTab implements TabComponent {
 
   private focusedBodyLine(bodyLength: number): number {
     if (this.onReset) return bodyLength - 1;
+    const values = this.form.values();
     const warningOffset =
       this.form.focus > 2 &&
-      this.form.values()[SETTING_KEYS.ttftAction] === S.settings.options.ttftAction.abort
+      qualityDisabled({
+        enabled: qualityValue(values[SETTING_KEYS.serverQualityEnabled]),
+        ttft: qualityValue(values[SETTING_KEYS.serverQualityTtft]),
+        noProgress: qualityValue(values[SETTING_KEYS.serverQualityNoProgress]),
+      })
         ? 1
         : 0;
     return this.form.focus + warningOffset;
@@ -198,9 +250,11 @@ export class SettingsTab implements TabComponent {
       ? `\x1b[7m${theme.danger(`[ ${S.resetAll} ]`)}\x1b[27m`
       : theme.danger(`  [ ${S.resetAll} ]`);
     const body = [...this.form.render(width), truncateToWidth(button, width)];
+    const bodyRows = Math.max(0, listRows - 1);
     return [
       truncateToWidth(theme.title(S.settingsHeader), width),
-      ...this.visibleBody(body, listRows),
+      this.renderHeader(width),
+      ...this.visibleBody(body, bodyRows),
     ];
   }
 
@@ -210,8 +264,8 @@ export class SettingsTab implements TabComponent {
       this.onReset ||
       this.form.focus === 0 ||
       this.form.focus === 1 ||
-      this.form.focus === 3 ||
-      this.form.focus === 5
+      this.form.focus === 5 ||
+      this.form.focus === 7
     );
   }
 
@@ -240,7 +294,7 @@ export class SettingsTab implements TabComponent {
       }
       return;
     }
-    if (isKey(data, Key.down) && this.form.focus === 5) {
+    if (isKey(data, Key.down) && this.form.focus === 7) {
       this.onReset = true;
       return;
     }
