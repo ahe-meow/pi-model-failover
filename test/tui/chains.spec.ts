@@ -310,7 +310,7 @@ describe("ChainsTab", () => {
     ]);
     const tab = createTab(deps);
 
-    await tab.handleInput("r");
+    await tab.handleInput("n");
     for (const _character of "coding") await tab.handleInput(Key.backspace);
     for (const character of "primary") await tab.handleInput(character);
     await tab.handleInput(Key.down);
@@ -335,7 +335,7 @@ describe("ChainsTab", () => {
     await tab.handleInput("/");
     for (const character of "match") await tab.handleInput(character);
     await tab.handleInput(Key.enter);
-    await tab.handleInput("r");
+    await tab.handleInput("n");
     for (const _character of "match-a") await tab.handleInput(Key.backspace);
     for (const character of "match-renamed") await tab.handleInput(character);
     await tab.handleInput(Key.down);
@@ -353,7 +353,7 @@ describe("ChainsTab", () => {
     const { deps, config, registrar } = await makeHarness([chain("coding"), chain("review")]);
     const tab = createTab(deps);
 
-    await tab.handleInput("r");
+    await tab.handleInput("n");
     for (const _character of "coding") await tab.handleInput(Key.backspace);
     for (const character of "review") await tab.handleInput(character);
     await tab.handleInput(Key.down);
@@ -504,6 +504,35 @@ describe("ChainsTab", () => {
     });
     expect(history.append).toHaveBeenCalledTimes(2);
     expect(history.append.mock.calls.every(([event]) => event.reason === "manual")).toBe(true);
+  });
+
+  it("resets every target in a chain after lowercase r confirmation", async () => {
+    const failed: TargetState = {
+      consecutiveFailures: 2,
+      cooldownLevel: 2,
+      cooldownUntil: new Date(60_000).toISOString(),
+      manualRecovery: false,
+      lastFailure: { ts: new Date(0).toISOString(), reason: "http-503" },
+    };
+    const { deps, state, history } = await makeHarness(
+      [chain("coding", [target("first"), target("second")])],
+      { "first/m": failed, "second/m": failed },
+    );
+    const tab = createTab(deps);
+
+    await tab.handleInput("r");
+    expect(tab.render(78, 7).join("\n")).toContain("Reset 2 targets in coding?");
+    expect(await state.read()).toEqual({ "first/m": failed, "second/m": failed });
+
+    await tab.handleInput(Key.left);
+    await tab.handleInput(Key.enter);
+
+    expect(await state.read()).toEqual({
+      "first/m": reset(),
+      "second/m": reset(),
+    });
+    expect(history.append).toHaveBeenCalledTimes(2);
+    expect(history.append.mock.calls.map(([event]) => event.reason)).toEqual(["manual", "manual"]);
   });
 
   it("keeps list and detail bodies at listRows plus one header line", async () => {

@@ -27,26 +27,47 @@ export interface AppDeps
   resetAll: () => Promise<number>;
   countTargets: () => number;
   close: () => void;
+  requestRender?: () => void;
 }
 
 export interface PiComponent {
   render(width: number): string[];
   handleInput(data: string): void;
   invalidate?(): void;
+  dispose?(): void;
   focused?: boolean;
 }
 
 export function createApp(deps: AppDeps): PiComponent {
+  const bar = new TabBar([...S.tabs]);
+  const help = new HelpOverlay([]);
+  const unsubscribeConfig = deps.config.onChange(() => deps.requestRender?.());
+  const modelManagerDeps: ModelManagerDeps = {
+    ...deps,
+    modelsFile: {
+      ...deps.modelsFile,
+      update: async (update, options) => {
+        const next = await deps.modelsFile.update(update, options);
+        deps.requestRender?.();
+        return next;
+      },
+    },
+  };
   const tabs: TabComponent[] = [
-    new ModelManagerTab(deps),
+    new ModelManagerTab(modelManagerDeps),
     new ChainsTab(deps),
     new HistoryTab(deps),
     new SettingsTab(deps.config, deps.resetAll, deps.countTargets),
   ];
-  const bar = new TabBar([...S.tabs]);
-  const help = new HelpOverlay([]);
   let lastHeight = 12;
+  let disposed = false;
 
+  const dispose = (): void => {
+    if (disposed) return;
+    disposed = true;
+    unsubscribeConfig();
+    for (const tab of tabs) tab.dispose?.();
+  };
   const render = (width: number): string[] => {
     const listRows = deps.config.get().settings.listRows;
     const tab = tabs[bar.active];
@@ -106,5 +127,5 @@ export function createApp(deps: AppDeps): PiComponent {
     void activeTab?.handleInput(data);
   };
 
-  return { render, handleInput, focused: true };
+  return { render, handleInput, dispose, focused: true };
 }

@@ -39,6 +39,11 @@ const providerTitle = (mode: ProviderMode, add: boolean): string =>
     mode
   ];
 const validProviderName = (name: string): boolean => Boolean(name) && !/[\s/]/.test(name);
+const normalizeProviderName = (value: string, fallback = E): string => {
+  const name = value.trim();
+  const base = name === "" ? fallback : name;
+  return base.replace(/[^A-Za-z0-9._-]+/g, "-");
+};
 const validHttpUrl = (url: string): boolean => {
   try {
     return ["http:", "https:"].includes(new URL(url).protocol);
@@ -89,8 +94,8 @@ function parseHeaders(value: string): Record<string, string> | string {
   };
   return Object.fromEntries(lines.map(headerParts));
 }
-function parseProvider(values: Values, required: boolean) {
-  const name = text(values, "name").trim();
+function parseProvider(values: Values, required: boolean, fallbackName = E) {
+  const name = normalizeProviderName(text(values, "name"), fallbackName);
   if (!validProviderName(name)) return P.invalidName;
   const baseUrl = text(values, "baseUrl").trim();
   if (!validHttpUrl(baseUrl)) return P.invalidUrl;
@@ -149,7 +154,7 @@ export class ProviderForm extends FormView {
     const save = (update: (models: ModelsJson) => ModelsJson) =>
       persist(this.options, update, this.options.onDone);
     if (mode === "rename") {
-      const name = text(values, "name").trim();
+      const name = normalizeProviderName(text(values, "name"), this.options.providerId);
       if (this.options.providerId === undefined || !validProviderName(name))
         return fail(P.invalidName);
       return save((models) => renameProvider(models, this.options.providerId as string, name));
@@ -160,9 +165,9 @@ export class ProviderForm extends FormView {
         return fail(P.invalidMultiplier);
       return save((models) => setMultiplier(models, this.options.providerId as string, multiplier));
     }
-    const parsed = parseProvider(values, this.options.providerId === undefined);
-    if (typeof parsed === "string") return fail(parsed);
     const previousId = this.options.providerId;
+    const parsed = parseProvider(values, previousId === undefined, previousId);
+    if (typeof parsed === "string") return fail(parsed);
     const id = previousId === undefined ? parsed.name : text(values, "id").trim();
     if (previousId !== undefined && !validProviderName(id)) return fail(P.invalidId);
     if (previousId !== undefined && id !== previousId) {

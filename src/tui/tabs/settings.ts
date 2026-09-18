@@ -95,6 +95,7 @@ export class SettingsTab implements TabComponent {
   private onReset = false;
   private labelWidth = 26;
   private pendingSave: Promise<void> | undefined;
+  private unsubscribeConfig: (() => void) | undefined;
 
   constructor(
     private config: ConfigStore,
@@ -102,9 +103,14 @@ export class SettingsTab implements TabComponent {
     private countTargets: () => number = () => 0,
   ) {
     this.form = this.buildForm();
-    config.onChange(() => {
+    this.unsubscribeConfig = config.onChange(() => {
       this.form = this.buildForm();
     });
+  }
+
+  dispose(): void {
+    this.unsubscribeConfig?.();
+    this.unsubscribeConfig = undefined;
   }
 
   private buildForm(): Form {

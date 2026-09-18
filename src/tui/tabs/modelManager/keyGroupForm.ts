@@ -11,6 +11,7 @@ import type { ModelManagerDeps } from "../modelManager.js";
 
 const API_OPTIONS = S.modelManager.keyGroupForm.apiOptions as readonly ApiType[];
 const KEY_FIELD = "keys";
+const E = String();
 
 function isKey(data: string, key: KeyId): boolean {
   return data === key || matchesKey(data, key);
@@ -115,25 +116,27 @@ function displayHeader(value: string): string {
 
 class KeyEntryEditor {
   private readonly rows: string[];
+  private selected = 0;
 
   constructor(
     value: string,
     private readonly onSave: (value: string) => void,
     private readonly onCancel: () => void,
   ) {
-    const initial = value === "" ? [] : value.split(/\r?\n/).filter((line) => Boolean(line.trim()));
-    this.rows = [...initial, ""];
+    const initial = value === "" ? [] : value.split(/\r?\n/);
+    this.rows =
+      initial.length === 0 || initial[initial.length - 1] !== E ? [...initial, E] : initial;
   }
 
   render(width: number, listRows: number): string[] {
-    const last = this.rows.length - 1;
     const body = this.rows.map((value, index) => {
-      const marker = index === last ? "▶ " : "  ";
-      const cursor = index === last ? S.form.cursor : "";
+      const marker = index === this.selected ? "▶ " : "  ";
+      const cursor = index === this.selected ? S.form.cursor : "";
       return truncateToWidth(`${marker}${value}${cursor}`, width);
     });
     const rows = Math.max(0, listRows);
-    const start = Math.max(0, body.length - rows);
+    const maxStart = Math.max(0, body.length - rows);
+    const start = Math.min(maxStart, Math.max(0, this.selected - rows + 1));
     const visible = body.slice(start, start + rows);
     while (visible.length < rows) visible.push("");
     return [
@@ -156,30 +159,40 @@ class KeyEntryEditor {
       this.onCancel();
       return;
     }
+    if (isKey(data, Key.up)) {
+      this.selected = Math.max(0, this.selected - 1);
+      return;
+    }
+    if (isKey(data, Key.down)) {
+      this.selected = Math.min(this.rows.length - 1, this.selected + 1);
+      return;
+    }
+    if (isKey(data, Key.ctrl("u"))) {
+      this.rows[this.selected] = "";
+      return;
+    }
     if (isKey(data, Key.enter)) {
       this.commit();
       return;
     }
     if (isKey(data, Key.backspace)) {
-      const index = this.rows.length - 1;
-      this.rows[index] = this.rows[index]?.slice(0, -1) ?? "";
+      this.rows[this.selected] = this.rows[this.selected]?.slice(0, -1) ?? "";
       return;
     }
     const lines = data.split(/\r\n|\n|\r/);
     if (lines.some((line) => [...line].some((character) => character.charCodeAt(0) < 32))) return;
     for (const [index, line] of lines.entries()) {
-      const row = this.rows.length - 1;
-      this.rows[row] = `${this.rows[row] ?? ""}${line}`;
-      if (index < lines.length - 1) this.commit();
+      this.rows[this.selected] = `${this.rows[this.selected] ?? ""}${line}`;
+      if (index < lines.length - 1) this.commit(true);
     }
   }
 
-  private commit(): void {
-    const index = this.rows.length - 1;
-    const row = this.rows[index]?.trim() ?? "";
-    if (row === "") return;
-    this.rows[index] = row;
-    this.rows.push("");
+  private commit(allowEmpty = false): void {
+    const row = this.rows[this.selected]?.trim() ?? "";
+    if (row === "" && !allowEmpty) return;
+    this.rows[this.selected] = row;
+    if (this.selected === this.rows.length - 1) this.rows.push("");
+    this.selected = Math.min(this.rows.length - 1, this.selected + 1);
   }
 }
 
@@ -374,7 +387,7 @@ export class KeyGroupForm implements TabComponent {
     }
 
     this.deps.registrar.syncOwned(next);
-    this.deps.notify(S.modelManager.keyGroupForm.saved);
+    (this.deps.notifyInfo ?? this.deps.notify)(S.modelManager.keyGroupForm.saved);
     this.deps.onDone(next);
   }
 }

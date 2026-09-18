@@ -348,6 +348,79 @@ describe("CatalogScreen", () => {
     expect(runtimeFactory).toHaveBeenCalledTimes(1);
   });
 
+  it("selects the first endpoint-imported model before adding it to the target provider", async () => {
+    const fetch = vi.fn(
+      async () => new Response(JSON.stringify({ data: [{ id: "new-endpoint" }] }), { status: 200 }),
+    ) as unknown as Fetch;
+    const { deps } = await makeDeps({
+      fetch,
+      catalog: [catalogModel("existing")],
+    });
+    const screen = new CatalogScreen({ ...deps, targetProviderId: "relay" });
+
+    await screen.beginEndpointImport("relay");
+    await input(screen, Key.space);
+    await input(screen, Key.enter);
+
+    const rendered = screen.render(100, 7).join("\n");
+    expect(rendered).toContain("new-endpoint");
+    expect(rendered.split("\n").find((line) => line.includes("new-endpoint"))).toContain("\x1b[7m");
+    await input(screen, Key.enter);
+
+    const saved = await deps.modelsFile.read();
+    expect(saved.providers.relay?.models.map(({ id }) => id)).toEqual(["new-endpoint"]);
+    expect(deps.onDone).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an endpoint-imported model selected when it is not the first visible catalog row", async () => {
+    const fetch = vi.fn(
+      async () => new Response(JSON.stringify({ data: [{ id: "new-endpoint" }] }), { status: 200 }),
+    ) as unknown as Fetch;
+    const { deps } = await makeDeps({
+      fetch,
+      catalog: [catalogModel("existing"), catalogModel("other")],
+    });
+    const screen = new CatalogScreen({ ...deps, targetProviderId: "relay" });
+
+    await screen.beginEndpointImport("relay");
+    await input(screen, Key.space);
+    await input(screen, Key.enter);
+
+    const rendered = screen.render(100, 7).join("\n");
+    expect(rendered).toContain("new-endpoint");
+    expect(rendered.split("\n").find((line) => line.includes("new-endpoint"))).toContain("\x1b[7m");
+  });
+
+  it("keeps a filtered endpoint import marked for the next provider add", async () => {
+    const fetch = vi.fn(
+      async () => new Response(JSON.stringify({ data: [{ id: "new-endpoint" }] }), { status: 200 }),
+    ) as unknown as Fetch;
+    const { deps } = await makeDeps({
+      fetch,
+      catalog: [catalogModel("existing")],
+    });
+    const screen = new CatalogScreen({ ...deps, targetProviderId: "relay" });
+
+    await input(screen, "/");
+    for (const character of "existing") await input(screen, character);
+    await input(screen, Key.enter);
+    await input(screen, "i");
+    await input(screen, Key.space);
+    await input(screen, Key.enter);
+    await input(screen, Key.space);
+    await input(screen, Key.enter);
+
+    const filtered = screen.render(100, 7).join("\n");
+    expect(filtered).toContain("existing");
+    expect(filtered).not.toContain("new-endpoint");
+
+    await input(screen, Key.enter);
+
+    const saved = await deps.modelsFile.read();
+    expect(saved.providers.relay?.models.map(({ id }) => id)).toEqual(["new-endpoint"]);
+    expect(deps.onDone).toHaveBeenCalledTimes(1);
+  });
+
   it("reports endpoint failures with a fixed safe string and performs no write", async () => {
     const secret = FAILURE_SECRET;
     const fetch = vi.fn(async () => {

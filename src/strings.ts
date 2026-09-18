@@ -4,10 +4,10 @@ export const S = {
   memoryMode: "[memory mode]",
   needsTui: "pi-model-failover needs the TUI",
   commandDescription: "Manage providers, failover chains, history",
-  // biome-ignore format: keep model switch strings together
-  modelSwitch: { selected: (ref: string) => `Using ${ref}`, unavailable: "Selected model is not available", authMissing: (ref: string) => `No configured authentication for ${ref}`, failed: "Could not switch model" },
-  serverQualityDisabledWarning:
-    "Server Quality timers are disabled; requests may wait until the provider or Pi aborts.",
+  // biome-ignore format: keep failover error string together
+  failover: { failure: (chainName: string, chainId: string, details: Record<string, unknown>) => `Failover chain ${chainName} (${chainId}) failed at ${typeof details.target === "string" ? details.target : "-"}: status ${typeof details.status === "number" ? details.status : "unknown"}; reason ${typeof details.reason === "string" ? details.reason : "unknown"}` },
+  // biome-ignore format: keep model switch and server quality strings together
+  ...{ modelSwitch: { selected: (ref: string) => `Using ${ref}`, unavailable: "Selected model is not available", authMissing: (ref: string) => `No configured authentication for ${ref}`, failed: "Could not switch model" }, serverQualityDisabledWarning: "Server Quality timers are disabled; requests may wait until the provider or Pi aborts." },
   modelsJsonInvalid: "models.json is invalid",
   sharedState: {
     invalid: "state.json is invalid; using memory mode",
@@ -332,7 +332,8 @@ export const S = {
         ["p", "use failover Chain"],
         ["a", "new chain"],
         ["d", "delete"],
-        ["r", "rename"],
+        ["r", "reset Chain"],
+        ["n", "rename"],
         ["R", "reset all"],
         ["/", "filter"],
         ["↑↓", "move"],
@@ -386,7 +387,8 @@ export const S = {
     settings: [["↑↓", "field"], ["Enter", "edit"], ["Ctrl+S", "save"], ["?", "help"], ["q", "quit"]] as Array<[string, string]>,
     // biome-ignore format: keep form hint entries compact
     form: [["Enter", "edit / commit"], ["Ctrl+S", "save"], ["↑↓", "move/select"], ["Tab", "next field"], ["Shift+Tab", "prev"], ["Space", "toggle"], ["Esc", "cancel"]] as Array<[string, string]>,
-    keyEntry: Object.entries({ Enter: "commit row", "Ctrl+S": "save and return", Esc: "cancel" }),
+    // biome-ignore format: keep key-entry hint entries compact
+    keyEntry: Object.entries({ Enter: "commit row", "Ctrl+S": "save and return", "Ctrl+U": "clear row", Esc: "cancel" }),
     confirm: [
       ["Tab", "choose confirm or cancel"],
       ["Enter", "confirm action"],

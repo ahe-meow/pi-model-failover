@@ -1,5 +1,5 @@
-import { Key } from "@earendil-works/pi-tui";
-import { describe, expect, it } from "vitest";
+import { Key, stripTerminalSequences } from "@earendil-works/pi-tui";
+import { describe, expect, it, vi } from "vitest";
 import { ConfigStore } from "../../src/config/configStore.js";
 import type { SharedState } from "../../src/config/sharedState.js";
 import { WriteQueue } from "../../src/config/writeQueue.js";
@@ -274,5 +274,78 @@ describe("app frame (C19, C20)", () => {
     app.handleInput("1");
     const h = app.render(78).length;
     expect(h === 4 + 12 + 1 || h === 4 + 12 + 2).toBe(true);
+  });
+
+  it("requests a TUI render when a settings save changes config", async () => {
+    const requestRender = vi.fn();
+    const { app, config } = await mk({ requestRender } as unknown as Partial<AppDeps>);
+
+    await config.update((value) => {
+      value.settings.listRows = 8;
+    });
+
+    app.render(78);
+    expect(requestRender).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops requesting renders after the app is disposed", async () => {
+    const requestRender = vi.fn();
+    const { app, config } = await mk({ requestRender });
+    app.dispose?.();
+    app.dispose?.();
+    await config.update((value) => {
+      value.settings.listRows = 8;
+    });
+
+    expect(requestRender).not.toHaveBeenCalled();
+  });
+
+  it("stops rebuilding the Settings form after app disposal", async () => {
+    const { app, config } = await mk();
+    app.dispose?.();
+    app.dispose?.();
+    await config.update((value) => {
+      value.settings.serverQuality.enabled = false;
+    });
+
+    app.handleInput("4");
+    const enabledRow = app
+      .render(100)
+      .map(stripTerminalSequences)
+      .find((line) => line.includes(S.settings.labels.serverQualityEnabled));
+    expect(config.get().settings.serverQuality.enabled).toBe(false);
+    expect(enabledRow).toContain(S.settings.options.serverQuality.on);
+  });
+
+  it("requests a TUI render when a model-list save completes", async () => {
+    const requestRender = vi.fn();
+    let models: ModelsJson = {
+      providers: {
+        relay: {
+          name: "Relay",
+          baseUrl: "https://relay.example/v1",
+          api: "openai-completions",
+          models: [],
+        },
+      },
+    };
+    const update = vi.fn(async (fn: (value: ModelsJson) => ModelsJson) => {
+      models = fn(structuredClone(models));
+      return structuredClone(models);
+    });
+    const { app } = await mk({
+      requestRender,
+      initialModels: structuredClone(models),
+      modelsFile: {
+        read: async () => structuredClone(models),
+        update,
+      },
+    });
+
+    app.handleInput("d");
+    app.handleInput(Key.left);
+    app.handleInput(Key.enter);
+    await vi.waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+    expect(requestRender).toHaveBeenCalledTimes(1);
   });
 });

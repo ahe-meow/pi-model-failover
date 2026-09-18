@@ -17,6 +17,7 @@ export interface TabComponent {
   isEditing(): boolean;
   hints(): Array<[string, string]>;
   helpTitle(): string;
+  dispose?(): void;
 }
 
 export interface HistoryDeps {

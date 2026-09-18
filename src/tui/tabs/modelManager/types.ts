@@ -20,6 +20,7 @@ export interface ModelManagerDeps {
   initialModels: ModelsJson;
   registrar: { syncOwned(models: ModelsJson): void };
   notify: (message: string) => void;
+  notifyInfo?: (message: string) => void;
   now: () => string;
   createKeyGroupId: () => string;
   fetch?: Fetch;

@@ -89,7 +89,6 @@ const FAILOVER_API_KEY = "unused";
 
 const asRecord = (value: unknown): Record<string, unknown> =>
   typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
-
 function parseFailureMessage(value: string): FailureDetails {
   const statusMatch =
     value.match(/\bHTTP\s+([1-5]\d{2})\b/i) ??
@@ -108,7 +107,6 @@ function parseFailureMessage(value: string): FailureDetails {
     ...(body.length === 0 ? {} : { body }),
   };
 }
-
 function failureError(details: FailureDetails, sentParams: string[]): FailureError {
   const error = new Error(S.appTitle) as FailureError;
   if (details.status !== undefined) error.status = details.status;
@@ -212,6 +210,7 @@ function terminalMessage(
   model: Model<Api>,
   clock: Clock,
   stopReason: "error" | "aborted" = "error",
+  errorMessage: string = S.appTitle,
 ): AssistantMessage {
   return {
     role: "assistant",
@@ -221,16 +220,20 @@ function terminalMessage(
     model: model.id,
     usage: emptyUsage(),
     stopReason,
-    errorMessage: S.appTitle,
+    errorMessage,
     timestamp: clock.now(),
   };
 }
-
-function terminalEvent(model: Model<Api>, clock: Clock, aborted = false): AssistantMessageEvent {
+function terminalEvent(
+  model: Model<Api>,
+  clock: Clock,
+  aborted = false,
+  errorMessage: string = S.appTitle,
+): AssistantMessageEvent {
   return {
     type: "error",
     reason: aborted ? "aborted" : "error",
-    error: terminalMessage(model, clock, aborted ? "aborted" : "error"),
+    error: terminalMessage(model, clock, aborted ? "aborted" : "error", errorMessage),
   };
 }
 
@@ -372,8 +375,13 @@ export function createFailoverProvider(deps: FailoverProviderDeps): {
           }
           if (finalMessage !== undefined) stream.end(finalMessage);
           else stream.end(terminalMessage(model, deps.clock));
-        } catch {
-          stream.push(terminalEvent(model, deps.clock, requestController.signal.aborted));
+        } catch (error) {
+          const errorMessage = requestController.signal.aborted
+            ? S.appTitle
+            : S.failover.failure(chain.name, chain.id, asRecord(error));
+          stream.push(
+            terminalEvent(model, deps.clock, requestController.signal.aborted, errorMessage),
+          );
         } finally {
           unlink();
         }

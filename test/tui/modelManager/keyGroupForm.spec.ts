@@ -147,6 +147,19 @@ describe("KeyGroupForm", () => {
     expect(deps.registrar.syncOwned).toHaveBeenCalledTimes(1);
   });
 
+  it("uses the info notification seam for successful saves", async () => {
+    const { deps } = await makeDeps({ providers: {} });
+    const notify = vi.fn();
+    const notifyInfo = vi.fn();
+    const form = new KeyGroupForm({ ...deps, notify, notifyInfo, onDone: vi.fn() });
+
+    await setFormValues(form, validValues);
+    await submit(form);
+
+    expect(notifyInfo).toHaveBeenCalledWith(S.modelManager.keyGroupForm.saved);
+    expect(notify).not.toHaveBeenCalledWith(S.modelManager.keyGroupForm.saved);
+  });
+
   it.each([
     ["prefix whitespace", { prefix: "relay name" }],
     ["prefix slash", { prefix: "relay/name" }],
@@ -254,6 +267,7 @@ describe("KeyGroupForm", () => {
     expect(form.hints()).toEqual([
       ["Enter", "commit row"],
       ["Ctrl+S", "save and return"],
+      ["Ctrl+U", "clear row"],
       ["Esc", "cancel"],
     ]);
   });
@@ -275,6 +289,51 @@ describe("KeyGroupForm", () => {
     expect(returned).toContain(redactSecret("sk-visible"));
   });
 
+  it("navigates rows and clears only the selected row", async () => {
+    const { deps } = await makeDeps({ providers: {} });
+    const form = new KeyGroupForm({ ...deps, onDone: vi.fn() });
+
+    await setNonKeyFormValues(form);
+    await openKeyEntry(form);
+    await input(form, "sk-first");
+    await input(form, Key.enter);
+    await input(form, "sk-second 0.25");
+    await input(form, Key.up);
+    await input(form, Key.ctrl("u"));
+
+    const selected = form.render(120, 5).join("\n");
+    expect(selected).toContain("▶ ▌");
+    expect(selected).not.toContain("sk-first");
+    expect(selected).toContain("sk-second 0.25");
+
+    await input(form, Key.down);
+    await input(form, Key.ctrl("s"));
+    await input(form, Key.ctrl("s"));
+
+    const models = await deps.modelsFile.read();
+    expect(models.providers["relay-1"]?.apiKey).toBe("sk-second");
+    expect(models.providers["relay-1"]?.piModelFailover?.costMultiplier).toBe(0.25);
+  });
+
+  it("preserves a blank pasted row while saving non-empty rows", async () => {
+    const { deps } = await makeDeps({ providers: {} });
+    const form = new KeyGroupForm({ ...deps, onDone: vi.fn() });
+
+    await setNonKeyFormValues(form);
+    await openKeyEntry(form);
+    await input(form, "sk-first\n\nsk-third");
+
+    const active = form.render(120, 6).join("\n");
+    expect(active).toContain("sk-first");
+    expect(active).toContain("sk-third");
+    expect(active).toContain("  \n");
+
+    await input(form, Key.ctrl("s"));
+    await input(form, Key.ctrl("s"));
+    const models = await deps.modelsFile.read();
+    expect(models.providers["relay-1"]?.apiKey).toBe("sk-first");
+    expect(models.providers["relay-2"]?.apiKey).toBe("sk-third");
+  });
   it("commits each non-empty row and persists the saved list with per-line multipliers", async () => {
     const { deps } = await makeDeps({ providers: {} });
     const form = new KeyGroupForm({ ...deps, onDone: vi.fn() });

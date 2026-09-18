@@ -277,7 +277,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
       setThinkingLevel(ctx.thinkingLevel);
       setStatusContext(ctx);
       latestNotify = (message) => ctx.ui.notify(message, "warning");
-      await ctx.ui.custom((_tui, _theme, _keybindings, done) => {
+      await ctx.ui.custom((tui, _theme, _keybindings, done) => {
         const appDeps: AppDeps = {
           config,
           modelsFile: modelManagerModelsFile,
@@ -287,6 +287,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
           history,
           registrar,
           notify: (message) => latestNotify?.(message),
+          notifyInfo: (message) => ctx.ui.notify(message, "info"),
           useModel,
           now,
           sessionId,
@@ -294,6 +295,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
           createKeyGroupId: () => crypto.randomUUID(),
           fetch: globalThis.fetch,
           runtimeFactory,
+          requestRender: () =>
+            typeof tui.requestRender === "function" ? tui.requestRender() : undefined,
           memoryMode: () => state.isMemoryMode(),
           countTargets: () =>
             config.get().chains.reduce((count, chain) => count + chain.targets.length, 0),

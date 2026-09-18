@@ -287,17 +287,19 @@ export class CatalogScreen implements TabComponent {
     this.applyFilter(mode);
     this.setMode(mode);
   }
-  private saveImported(selected: CatalogModel[]): Promise<void> {
-    if (selected.length === 0) {
-      this.setMode("catalog");
-      return Promise.resolve();
-    }
-    return this.writeCatalog(
-      (catalog) => selected.reduce(upsertCatalogModel, catalog),
-      () => {
-        this.setMode("catalog");
-      },
-    );
+  private async saveImported(selected: CatalogModel[]): Promise<void> {
+    if (selected.length === 0) return void this.setMode("catalog");
+    // biome-ignore format: keep the import selection handoff compact
+    await this.writeCatalog((catalog) => selected.reduce(upsertCatalogModel, catalog), () => this.setMode("catalog"));
+    const first = selected[0],
+      index =
+        first === undefined ? -1 : this.visibleCatalogModels.findIndex(({ id }) => id === first.id),
+      sourceIndex = this.catalogModels.findIndex(({ id }) => id === first?.id);
+    if (index < 0) return void this.lists.catalog.mark(sourceIndex);
+    this.lists.catalog.handleInput(Key.home);
+    for (let step = 0; step < index; step++) this.lists.catalog.handleInput(Key.down);
+    // biome-ignore format: avoid toggling an already-marked imported model
+    if (!this.lists.catalog.markedIndices().includes(sourceIndex)) this.lists.catalog.handleInput(Key.space);
   }
   private async saveToProviders(providerIds: string[]): Promise<void> {
     if (providerIds.length === 0 || this.providerModels.length === 0) {

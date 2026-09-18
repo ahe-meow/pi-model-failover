@@ -290,27 +290,24 @@ Tests assert: round trip of a fixture with `piModelManager` markers and nested u
 
 ### `adapters/registrar.ts`
 
-Responsibility: mirror owned providers into Pi at runtime. Failover registration is deferred to P2.
+Responsibility: mirror owned providers and the reserved `failover` provider into Pi at runtime.
 
 ```ts
 export interface PiRegistrar { registerProvider(id: string, cfg: unknown): void; unregisterProvider(id: string): void; isBuiltin(id: string): boolean; }
 export class Registrar {
-  constructor(pi: PiRegistrar, notify: (msg: string) => void);
+  constructor(pi: PiRegistrar, notify: (msg: string) => void, createFailoverConfig: FailoverConfigFactory);
   syncOwned(models: ModelsJson): void;
+  syncFailover(chains: Chain[], models: ModelsJson): void;
 }
 ```
 
-P1 `Registrar` exposes `syncOwned(models)` only. It tracks the ids it previously registered as owned. `syncOwned` registers current owned providers, unregisters previously owned ids that disappeared, and skips any id reported as built in. A skipped built-in produces one notification and never calls registration. Registration receives the raw provider configuration only at this adapter boundary; it is never passed to UI rendering or user-visible reporting.
+`Registrar` tracks the ids it previously registered as owned. `syncOwned` registers current owned providers, unregisters previously owned ids that disappeared, and skips any id reported as built in. A skipped built-in produces one notification and never calls registration. `syncFailover` registers the reserved `failover` provider when the generated config has Virtual Models, unregisters it when the generated config has none, and skips a built-in `failover` id. Registration receives raw provider configuration only at this adapter boundary; it is never passed to UI rendering or user-visible reporting.
 
-`syncFailover` begins in P2 and is intentionally absent from the P1 implementation. The `adapters/failoverProvider.ts` contract also begins in P2. Any source interface that includes either P2 surface must keep it unimplemented until the P2 Provider survey is complete.
+Tests assert: built-in ids are skipped with one notification; removed providers are unregistered; non-empty Chains register the failover provider and empty Chains unregister it.
 
-Tests assert: built-in id skipped with one notification; removed provider unregistered. P2 tests cover failover registration separately.
+### `adapters/failoverProvider.ts`
 
-### `adapters/failoverProvider.ts` (P2)
-
-This adapter begins in P2; it is not a P1 contract or implementation surface. P2 reconciles the installed Pi Provider contract before implementing it.
-
-Responsibility: Pi Provider contract for the reserved `failover` provider, delegating request decisions to `domain/engine.ts`.
+Responsibility: the current Pi Provider contract for the reserved `failover` provider, delegating request decisions to `domain/engine.ts`.
 
 ```ts
 export interface Attempt {
@@ -347,7 +344,7 @@ export interface FailoverConfigFactory {
 
 `ProviderConfig.streamSimple` consumes and returns Pi's official `AssistantMessageEventStream`, created with `createAssistantMessageEventStream` from `@earendil-works/pi-ai`. The domain engine remains Pi-independent and exposes only `Attempt`/`StreamChunk`; `@earendil-works/pi-ai` is imported only by `src/adapters/failoverProvider.ts`.
 
-The adapter exposes one Virtual Model per non-empty Chain as `failover/<chainId>`, resolves the underlying registry model at request time, delegates attempts to the engine, and forwards only the winning attempt's events. Unknown chains and provider failures use generic redacted errors and never expose credentials or raw response bodies.
+The adapter exposes one Virtual Model per non-empty Chain as `failover/<chainId>`, resolves the underlying registry model at request time, delegates attempts to the engine, and forwards only the winning attempt's events. Unknown chains still use generic redacted errors. After all available Targets fail, the structured final failure is formatted with the Chain name and ID, final Target, status, and reason; credentials and raw response bodies are not included in that user-facing error. History retains only redacted structured provider details where available.
 
 `send` resolves `provider/modelId`, applies Target model parameters, maps `reasoningEffort: "inherit"` to the current thinking level, strips rejected compatibility parameters, forwards the attempt signal, and converts Pi events into the domain stream shape. Tests use a fake `ModelRegistryLike` and the official event-stream factory without network access.
 
@@ -381,7 +378,7 @@ Tests assert: 600 appends → 500 lines, newest kept (C17); malformed line count
 
 ## tui/
 
-All project components implement the project's `PiComponent` shape: `{ render(width: number): string[]; handleInput(data: string): void; invalidate?(): void; focused?: boolean }`. `createApp` may omit the optional `invalidate`. The installed `@earendil-works/pi-tui` `Component` contract requires `invalidate(): void`; before passing the app to `ui.custom`, `src/index.ts` supplies a wrapper with a required `invalidate` that delegates to the app's optional method. Rendering uses `truncateToWidth`, `visibleWidth`, `Key`, `matchesKey` from `@earendil-works/pi-tui`. Strings come from `src/strings.ts`.
+All project components implement the project's `PiComponent` shape: `{ render(width: number): string[]; handleInput(data: string): void; invalidate?(): void; dispose?(): void; focused?: boolean }`. `createApp` may omit the optional `invalidate`. The installed `@earendil-works/pi-tui` `Component` contract requires `invalidate(): void`; before passing the app to `ui.custom`, `src/index.ts` supplies a wrapper with a required `invalidate` that delegates to the app's optional method. Rendering uses `truncateToWidth`, `visibleWidth`, `Key`, `matchesKey` from `@earendil-works/pi-tui`. Strings come from `src/strings.ts`.
 
 ### `tui/footer.ts`
 
@@ -453,7 +450,7 @@ export class Form {
 }
 ```
 
-Tests: `Tab` moves focus; `number` clamps to min/max; `secret` renders via `redactSecret`; `select` shows `warning[value]` under the field when set (the `abort` warning path); `Enter` on last field submits, `Esc` cancels.
+Tests: `Tab` moves focus; `number` clamps to min/max; `secret` renders via `redactSecret`; `select` shows `warning[value]` under the field when set (the Server Quality disabled-timer warning path); `Enter` on last field submits, `Esc` cancels.
 
 ### `tui/primitives/multiSelectList.ts`
 
@@ -467,13 +464,15 @@ Responsibility: root component; owns `TabBar`, active tab component, `HelpOverla
 export function createApp(deps: AppDeps): PiComponent;  // AppDeps = every store, adapter, notify, and settings getter; the returned invalidate is optional and is required by pi-tui only after src/index.ts wraps it for ui.custom
 ```
 
+`createApp` subscribes to `ConfigStore` changes and wraps persisted `ModelsJsonFile` updates so successful Provider, Catalog, Chain, and Settings changes request an immediate TUI render. Its optional `dispose()` unsubscribes the app listener and disposes tabs, including the Settings listener, when `/failover` closes.
+
 Tests: `2` switches to Chains; `?` shows overlay and swallows other keys until closed; total render height = header + tabs + listRows + footer for every tab (C19).
 
 ### `tui/tabs/modelManager.ts`, `tui/tabs/chains.ts`, `tui/tabs/history.ts`, `tui/tabs/settings.ts`
 
-One module per Tab; each composes primitives and calls `domain/*` functions then `ConfigStore.update` / `ModelsJsonFile.update` / `Registrar.syncOwned` for P1 provider changes. P2 failover synchronization is deferred. Sub-screens that push a module past 400 lines split into `tui/tabs/modelManager/*.ts` (provider detail, key-group form, catalog screen). Screens and key maps: `docs/design/04-ui.md`.
+One module per Tab; each composes primitives and calls `domain/*` functions then `ConfigStore.update` / `ModelsJsonFile.update` / `Registrar.syncOwned` / `Registrar.syncFailover` for provider, catalog, and Chain changes. Successful persisted changes request a redraw through the existing render infrastructure. Sub-screens that push a module past 400 lines split into `tui/tabs/modelManager/*.ts` (provider detail, key-group form, catalog screen). Screens and key maps: `docs/design/04-ui.md`.
 
-Tests per tab: each key in the key map reaches its handler; destructive actions (delete provider, delete chain, reset all) require the confirmation screen; P1 provider-delete confirmation covers provider removal only; P2 adds chain-aware confirmation naming affected chains, target cleanup, and affected Virtual Model re-registration (C7 UI half); history `r` calls `SharedState.update` with `reset()` and appends a `manual` event (C18 UI half); settings `listRows` bound 5–20.
+Tests per tab: each key in the key map reaches its handler; destructive actions (delete provider, delete chain, reset all) require the confirmation screen; provider deletion names affected Chains and cleans matching Targets before Virtual Model re-registration; history `r` calls `SharedState.update` with `reset()` and appends a `manual` event (C18 UI half); settings `listRows` bound 5–20 and its listener is released on disposal.
 
 ### `src/strings.ts`
 

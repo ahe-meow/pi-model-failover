@@ -7,6 +7,25 @@ import { SettingsTab } from "../../src/tui/tabs/settings.js";
 import { MemoryFs } from "../fakes/memoryFs.js";
 
 describe("SettingsTab", () => {
+  it("stops rebuilding its form after disposal", async () => {
+    const config = await ConfigStore.open(new MemoryFs(), new WriteQueue(), "/d");
+    const tab = new SettingsTab(config, async () => 0);
+    const disposable = tab as SettingsTab & { dispose: () => void };
+
+    disposable.dispose();
+    disposable.dispose();
+    await config.update((value) => {
+      value.settings.serverQuality.enabled = false;
+    });
+
+    const enabledRow = tab
+      .render(100, 7)
+      .map(stripTerminalSequences)
+      .find((line) => line.includes(S.settings.labels.serverQualityEnabled));
+    expect(config.get().settings.serverQuality.enabled).toBe(false);
+    expect(enabledRow).toContain(S.settings.options.serverQuality.on);
+  });
+
   it("renders a fixed settings header aligned with every value", async () => {
     const config = await ConfigStore.open(new MemoryFs(), new WriteQueue(), "/d");
     const t = new SettingsTab(config, async () => 0);

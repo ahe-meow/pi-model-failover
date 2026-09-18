@@ -85,12 +85,16 @@ The state of a Target after a Persistent Failure. The Target stays excluded unti
 _Avoid_: disabled, blacklisted, dead
 
 **TTFT Budget**:
-The time allowed between sending a request and receiving its first meaningful delta.
+The time allowed between sending a request and receiving its first meaningful delta when the Server Quality TTFT signal is enabled.
 _Avoid_: first-token timeout, latency limit
 
-**TTFT Action**:
-What happens when the TTFT Budget runs out: `cooldown-only` finishes the request and cools the Target; `abort` cancels, cools, and moves to the next Target.
-_Avoid_: timeout mode, strategy
+**Server Quality Policy**:
+The effective set of `enabled`, `ttft`, and `noProgress` switches. Global settings provide defaults; each Target may override a field with `inherit`, `on`, or `off`. Disabled signals do not start timers.
+_Avoid_: timeout mode, per-request timeout strategy
+
+**Server Quality Snapshot**:
+The effective Server Quality Policy resolved once at request start. Settings changes affect later requests, not an in-flight request.
+_Avoid_: live policy, dynamic timeout settings
 
 **No-Progress Budget**:
 The longest silence tolerated after the first delta before the Target is treated as failed.

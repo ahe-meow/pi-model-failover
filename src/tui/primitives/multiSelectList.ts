@@ -83,6 +83,11 @@ export class MultiSelectList {
     else if (isKey(data, Key.space)) this.list.toggleMark();
   }
 
+  mark(index: number): void {
+    const row = this.rows[index];
+    if (row !== undefined) row.marked = true;
+  }
+
   markedIndices(): number[] {
     return this.rows.flatMap((row, index) => (row.marked ? [index] : []));
   }

@@ -361,8 +361,8 @@ export async function* runChain(
         return;
       }
 
-      lastError = outcome.error;
       let classification = classify(outcome.input);
+      lastError = { ...outcome.input, target: candidate.ref, reason: classification.reason };
       if (classification.cls === "compat-retry" && classification.offendingParam !== undefined) {
         if (!stripped.includes(classification.offendingParam)) {
           stripped.push(classification.offendingParam);

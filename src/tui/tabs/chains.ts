@@ -21,6 +21,7 @@ export type { ChainsDeps } from "./chains/types.js";
 
 type Screen = "list" | "detail" | "form";
 type FormMode = "new" | "rename";
+const RENAME_MODE: FormMode = "rename";
 const renderPanel = (title: string, body: string[], width: number, listRows: number): string[] => [
   theme.title(truncateToWidth(title, width)),
   ...fitBody(body, width, listRows),
@@ -86,9 +87,9 @@ export class ChainsTab implements TabComponent {
     else if (data === "a") {
       this.openChainForm("new");
     } else if (data === "d") this.openDelete();
-    else if (data === "r") {
-      this.openChainForm("rename");
-    } else if (data === "R") this.openResetChain();
+    else if (data === "r") this.openResetChain();
+    else if (data === "n") this.openChainForm(RENAME_MODE);
+    else if (data === "R") this.openResetChain();
     else if (data === "p") return selectChain(this.deps.useModel, this.selectedListChain()?.id);
     else if (isKey(data, Key.enter)) this.openSelectedChain();
     else move(this.chainList, data);
@@ -385,7 +386,6 @@ export class ChainsTab implements TabComponent {
   private async refreshState(): Promise<void> {
     this.states = await this.deps.state.read();
   }
-
   private closeForm(screen: Screen): void {
     this.form = undefined;
     this.formTitle = "";
