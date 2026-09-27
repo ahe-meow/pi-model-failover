@@ -3,13 +3,13 @@ import { fetchEndpointModels, importPiBuiltinCatalog } from "../../../adapters/c
 import {
   CATALOG_DEFAULTS,
   removeCatalogModel,
+  setCatalogReasoningLevels,
   upsertCatalogModel,
 } from "../../../domain/catalog.js";
 import type { Fetch } from "../../../domain/ports.js";
 import type { CatalogModel, ModelsJson } from "../../../domain/types.js";
 import { S } from "../../../strings.js";
 import { Confirm } from "../../primitives/confirm.js";
-import type { Form } from "../../primitives/form.js";
 import { MultiSelectList } from "../../primitives/multiSelectList.js";
 import { tableColumns } from "../../primitives/table.js";
 import { renderFilterDraft } from "../../primitives/textFilter.js";
@@ -24,13 +24,9 @@ import {
   selectedCatalogIds,
   syncCatalogList,
 } from "./catalogFilter.js";
-import {
-  createCatalogManualForm,
-  parseCatalogModel,
-  renderCatalogConfirm,
-  renderCatalogManual,
-} from "./catalogManual.js";
+import { CatalogManualEditor, renderCatalogConfirm } from "./catalogManual.js";
 import { persistCatalog, persistModelsToProviders } from "./catalogPersistence.js";
+import { CatalogReasoningEditor } from "./catalogReasoning.js";
 import {
   CATALOG_HEADERS as HEADER,
   type ImportedCatalogMode as ImportedMode,
@@ -73,9 +69,8 @@ export class CatalogScreen implements TabComponent {
   private importModels: CatalogModel[] = [];
   private providerModels: CatalogModel[] = [];
   private listRows = 7;
-  private manualForm: Form | undefined;
-  private manualDefaults: Record<string, unknown> = {};
-  private manualError: string | undefined;
+  private manualEditor: CatalogManualEditor | undefined;
+  private reasoningEditor: CatalogReasoningEditor | undefined;
   private confirm: Confirm | undefined;
   private error: string | undefined;
   private pending: Promise<void> | undefined;
@@ -121,15 +116,11 @@ export class CatalogScreen implements TabComponent {
     for (const list of Object.values(this.lists)) list.setListRows(dataRows);
     this.syncCatalog();
     const filter = this.filters[this.mode];
-    if (filter.isEditing)
-      return renderFilterDraft(
-        width,
-        S.filter.inputTitle,
-        filter,
-        2 + Math.max(0, this.listRows - 1),
-      );
-    if (this.manualForm !== undefined)
-      return renderCatalogManual(this.manualForm, this.manualError, width, this.listRows);
+    // biome-ignore format: keep filter render compact
+    if (filter.isEditing) return renderFilterDraft(width, S.filter.inputTitle, filter, 2 + Math.max(0, this.listRows - 1));
+    if (this.reasoningEditor !== undefined)
+      return this.reasoningEditor.render(width, this.listRows);
+    if (this.manualEditor !== undefined) return this.manualEditor.render(width, this.listRows);
     if (this.confirm !== undefined)
       return renderCatalogConfirm(this.confirm, this.header(), width, this.listRows);
     return [
@@ -144,8 +135,12 @@ export class CatalogScreen implements TabComponent {
       if (filter.handleInput(data) === "applied") this.applyFilter(this.mode);
       return;
     }
-    if (this.manualForm !== undefined) {
-      this.manualForm.handleInput(data);
+    if (this.reasoningEditor !== undefined) {
+      this.reasoningEditor.handleInput(data);
+      return this.waitForPending();
+    }
+    if (this.manualEditor !== undefined) {
+      this.manualEditor.handleInput(data);
       return this.waitForPending();
     }
     if (this.confirm !== undefined) {
@@ -166,7 +161,8 @@ export class CatalogScreen implements TabComponent {
             ? pick(this.catalogModels, marked)[0]
             : this.visibleCatalogModels[this.lists.catalog.selected];
         if (model !== undefined) this.openManual(model);
-      } else if (data === "d") this.openDeleteConfirmation();
+      } else if (data === "t") this.openReasoningEditor();
+      else if (data === "d") this.openDeleteConfirmation();
       else if (isKey(data, Key.escape) && this.filters.catalog.clear()) this.applyFilter("catalog");
       else if (isKey(data, Key.escape)) return void this.deps.onBack?.();
       else {
@@ -190,19 +186,24 @@ export class CatalogScreen implements TabComponent {
     return this.waitForPending();
   }
   isEditing(): boolean {
-    return this.filters[this.mode].isEditing || this.manualForm?.isEditing() || false;
+    return (
+      this.filters[this.mode].isEditing ||
+      this.reasoningEditor?.isEditing() ||
+      this.manualEditor?.isEditing() ||
+      false
+    );
   }
   hints(): Array<[string, string]> {
-    if (this.manualForm !== undefined) return S.hints.form;
+    if (this.reasoningEditor !== undefined) return this.reasoningEditor.hints();
+    if (this.manualEditor !== undefined) return this.manualEditor.hints();
     if (this.confirm !== undefined) return S.hints.confirm;
-    return this.mode === "catalog"
-      ? S.hints.modelManager.catalog
-      : S.hints.modelManager.catalogSelect;
+    // biome-ignore format: keep catalog hint selection compact
+    return this.mode === "catalog" ? S.hints.modelManager.catalog : S.hints.modelManager.catalogSelect;
   }
   helpTitle(): string {
-    return this.manualForm === undefined
-      ? S.modelManager.catalog.title
-      : S.modelManager.catalog.manualTitle;
+    if (this.reasoningEditor !== undefined) return this.reasoningEditor.helpTitle();
+    if (this.manualEditor !== undefined) return this.manualEditor.helpTitle();
+    return S.modelManager.catalog.title;
   }
   private setMode(mode: Mode): void {
     this.mode = mode;
@@ -322,12 +323,8 @@ export class CatalogScreen implements TabComponent {
   }
   private openDeleteConfirmation(): void {
     if (this.visibleCatalogModels.length === 0) return;
-    const ids = selectedCatalogIds(
-      this.catalogModels,
-      this.visibleCatalogModels,
-      this.lists.catalog.selected,
-      this.lists.catalog.markedIndices(),
-    );
+    // biome-ignore format: keep selection lookup compact
+    const ids = selectedCatalogIds(this.catalogModels, this.visibleCatalogModels, this.lists.catalog.selected, this.lists.catalog.markedIndices());
     if (ids.length === 0) return;
     this.confirm = new Confirm(
       S.modelManager.catalog.deleteTitle(ids.length),
@@ -344,28 +341,30 @@ export class CatalogScreen implements TabComponent {
   private deleteCatalog(ids: string[]): Promise<void> {
     return this.writeCatalog((catalog) => ids.reduce(removeCatalogModel, catalog));
   }
-  private openManual(model?: CatalogModel): void {
-    this.manualError = undefined;
-    this.manualDefaults = structuredClone(model?.defaults ?? CATALOG_DEFAULTS.defaults);
-    this.manualForm = createCatalogManualForm(
-      model,
-      (values) => this.start(() => this.saveManual(values)),
-      () => {
-        this.manualForm = undefined;
-        this.manualError = undefined;
-      },
-    );
+  private openReasoningEditor(): void {
+    // biome-ignore format: keep selection lookup compact
+    const ids = selectedCatalogIds(this.catalogModels, this.visibleCatalogModels, this.lists.catalog.selected, this.lists.catalog.markedIndices());
+    if (ids.length === 0) return;
+    // biome-ignore format: keep reasoning save handoff compact
+    this.reasoningEditor = new CatalogReasoningEditor(this.catalogModels.filter(({ id }) => ids.includes(id)), (levels) => this.start(() => this.writeCatalog((catalog) => setCatalogReasoningLevels(catalog, ids, levels), () => (this.reasoningEditor = undefined))), () => (this.reasoningEditor = undefined));
   }
-  private async saveManual(values: Record<string, unknown>): Promise<void> {
-    const model = parseCatalogModel(values, this.manualDefaults);
-    if (typeof model === "string") return this.manualFailure(model);
-    return this.writeCatalog(
-      (catalog) => upsertCatalogModel(catalog, model),
+  private openManual(model?: CatalogModel): void {
+    this.manualEditor = new CatalogManualEditor(
+      model,
+      (message) => this.deps.notify(message),
+      (next) =>
+        this.start(() =>
+          this.writeCatalog(
+            (catalog) => upsertCatalogModel(catalog, next),
+            () => {
+              this.manualEditor = undefined;
+            },
+            (message) => this.manualEditor?.showError(message),
+          ),
+        ),
       () => {
-        this.manualForm = undefined;
-        this.manualError = undefined;
+        this.manualEditor = undefined;
       },
-      (message) => this.manualFailure(message),
     );
   }
   private async writeCatalog(
@@ -379,10 +378,6 @@ export class CatalogScreen implements TabComponent {
     onSuccess();
     this.syncCatalog();
   }
-  private manualFailure(message: string): void {
-    this.manualError = message;
-    this.deps.notify(message);
-  }
   private start(task: () => Promise<void>): void {
     this.pending = task().catch(() => this.fail(S.modelManager.catalog.saveFailed));
   }
@@ -394,6 +389,7 @@ export class CatalogScreen implements TabComponent {
   }
   private fail(message: string): void {
     this.error = message;
+    this.reasoningEditor = undefined;
     this.mode = "catalog";
     this.deps.notify(message);
   }

@@ -11,16 +11,17 @@ import { classify, type FailureInput } from "./failureClass.js";
 import type { Clock } from "./ports.js";
 import { redactFailureBody } from "./redact.js";
 import { isServerQualityEnabled } from "./serverQuality.js";
-import type {
-  Chain,
-  FailoverErrorDetails,
-  FailoverEvent,
-  FailoverReason,
-  Settings,
-  Target,
-  TargetRef,
-  TargetSettings,
-  TargetState,
+import {
+  type Chain,
+  type FailoverErrorDetails,
+  type FailoverEvent,
+  type FailoverReason,
+  type Settings,
+  type Target,
+  TargetExhaustionError,
+  type TargetRef,
+  type TargetSettings,
+  type TargetState,
 } from "./types.js";
 
 export interface Attempt {
@@ -224,12 +225,14 @@ function candidatesFor(
   chain: Chain,
   states: Record<TargetRef, TargetState>,
   now: number,
-): Candidate[] {
+): [Candidate[], number, number] {
   const all = chain.targets.map((target, index) => ({ target, ref: targetRef(target), index }));
+  const manualCount = all.filter(({ ref }) => states[ref]?.manualRecovery).length;
+  const cooling = all.filter(({ ref }) => isExcluded(states[ref], now)).length - manualCount;
   const normal = all.filter(({ ref }) => !isExcluded(states[ref], now));
-  return normal.length > 0 ? normal : all.filter(({ ref }) => !states[ref]?.manualRecovery);
+  // biome-ignore format: keep the selection tuple compact
+  return [normal.length > 0 ? normal : all.filter(({ ref }) => !states[ref]?.manualRecovery), manualCount, cooling];
 }
-
 async function recordFailure(
   deps: EngineDeps,
   ref: TargetRef,
@@ -299,9 +302,10 @@ export async function* runChain(
   if (signal.aborted) throw abortError();
   const states = await deps.state.read();
   if (signal.aborted) throw abortError();
-  const candidates = candidatesFor(chain, states, deps.clock.now());
-  if (candidates.length === 0) throw new Error("no targets available");
-
+  const selection = candidatesFor(chain, states, startedAt);
+  // biome-ignore format: keep exhaustion details together
+  if (selection[0].length === 0) throw new TargetExhaustionError(chain.name, chain.id, chain.targets.length, selection[1], selection[2]);
+  const candidates = selection[0];
   let lastError: unknown = new Error("all targets failed");
   for (let index = 0; index < candidates.length; index++) {
     const candidate = candidates[index];

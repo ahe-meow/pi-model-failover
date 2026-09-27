@@ -276,16 +276,46 @@ describe("app frame (C19, C20)", () => {
     expect(h === 4 + 12 + 1 || h === 4 + 12 + 2).toBe(true);
   });
 
-  it("requests a TUI render when a settings save changes config", async () => {
-    const requestRender = vi.fn();
-    const { app, config } = await mk({ requestRender } as unknown as Partial<AppDeps>);
+  it("renders the saved Settings value during a synchronous render request", async () => {
+    let app: ReturnType<typeof createApp> | undefined;
+    let rendered: string[] = [];
+    const requestRender = vi.fn(() => {
+      rendered = app?.render(100) ?? [];
+    });
+    const created = await mk({ requestRender });
+    app = created.app;
+    app.handleInput("4");
 
-    await config.update((value) => {
+    await created.config.update((value) => {
       value.settings.listRows = 8;
     });
 
-    app.render(78);
-    expect(requestRender).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(requestRender).toHaveBeenCalledTimes(1));
+    const listRowsLine = rendered
+      .map(stripTerminalSequences)
+      .find((line) => line.includes(S.settings.labels.listRows));
+    expect(listRowsLine).toContain("8");
+  });
+
+  it("renders the renamed Provider ID during a synchronous model save refresh", async () => {
+    let app: ReturnType<typeof createApp> | undefined;
+    let rendered: string[] = [];
+    const requestRender = vi.fn(() => {
+      rendered = app?.render(100) ?? [];
+    });
+    const created = await mk({ requestRender });
+    app = created.app;
+    app.handleInput(Key.enter);
+    app.handleInput("e");
+    for (let index = 0; index < "relay".length; index++) app.handleInput(Key.backspace);
+    for (const character of "renamed") app.handleInput(character);
+    for (let index = 0; index < 7; index++) app.handleInput(Key.down);
+    app.handleInput(Key.ctrl("s"));
+
+    await vi.waitFor(() => expect(requestRender).toHaveBeenCalledTimes(1));
+    expect(rendered.join("\\n")).toContain("renamed  https://relay.example/v1");
+    expect(rendered.join("\\n")).not.toContain(S.modelManager.providerForm.editTitle);
+    expect(rendered.join("\\n")).not.toContain("relay  https://");
   });
 
   it("stops requesting renders after the app is disposed", async () => {
@@ -317,6 +347,51 @@ describe("app frame (C19, C20)", () => {
     expect(enabledRow).toContain(S.settings.options.serverQuality.on);
   });
 
+  it("renders a newly saved Catalog model without another input", async () => {
+    let app: ReturnType<typeof createApp> | undefined;
+    let rendered: string[] = [];
+    const requestRender = vi.fn(() => {
+      rendered = app?.render(100) ?? [];
+    });
+    const created = await mk({ requestRender });
+    app = created.app;
+    app.handleInput("c");
+
+    await created.config.update((value) => {
+      value.catalog = [
+        {
+          id: "fresh-catalog-model",
+          reasoning: false,
+          vision: false,
+          contextWindow: 1_000,
+          maxTokens: 100,
+          defaults: {},
+        },
+      ];
+    });
+
+    await vi.waitFor(() => expect(requestRender).toHaveBeenCalledTimes(1));
+    expect(rendered.join("\\n")).toContain("fresh-catalog-model");
+  });
+
+  it("renders a newly saved Chain without another input", async () => {
+    let app: ReturnType<typeof createApp> | undefined;
+    let rendered: string[] = [];
+    const requestRender = vi.fn(() => {
+      rendered = app?.render(100) ?? [];
+    });
+    const created = await mk({ requestRender });
+    app = created.app;
+    app.handleInput("2");
+
+    await created.config.update((value) => {
+      value.chains = [{ id: "fresh-chain", name: "Fresh Chain", targets: [] }];
+    });
+
+    await vi.waitFor(() => expect(requestRender).toHaveBeenCalledTimes(1));
+    expect(rendered.join("\\n")).toContain("fresh-chain");
+  });
+
   it("requests a TUI render when a model-list save completes", async () => {
     const requestRender = vi.fn();
     let models: ModelsJson = {
@@ -345,7 +420,6 @@ describe("app frame (C19, C20)", () => {
     app.handleInput("d");
     app.handleInput(Key.left);
     app.handleInput(Key.enter);
-    await vi.waitFor(() => expect(update).toHaveBeenCalledTimes(1));
-    expect(requestRender).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(requestRender).toHaveBeenCalledTimes(1));
   });
 });

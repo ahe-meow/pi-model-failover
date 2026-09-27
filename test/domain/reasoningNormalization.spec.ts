@@ -1,4 +1,4 @@
-import { getSupportedThinkingLevels, type Model } from "@earendil-works/pi-ai";
+import { clampThinkingLevel, getSupportedThinkingLevels, type Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { ModelsJsonFile } from "../../src/adapters/modelsJson.js";
 import { WriteQueue } from "../../src/config/writeQueue.js";
@@ -53,8 +53,10 @@ const piModel = (thinkingLevelMap: Record<string, string | null>): Model<"openai
 });
 
 const expectSixLevels = (thinkingLevelMap: Record<string, string | null> | undefined): void => {
+  const model = piModel(thinkingLevelMap ?? {});
   expect(thinkingLevelMap?.minimal).toBeNull();
-  expect(getSupportedThinkingLevels(piModel(thinkingLevelMap ?? {}))).toEqual(expectedLevels);
+  expect(getSupportedThinkingLevels(model)).toEqual(expectedLevels);
+  expect(clampThinkingLevel(model, "max")).toBe("max");
 };
 
 describe("reasoning capability normalization", () => {
@@ -111,5 +113,40 @@ describe("reasoning capability normalization", () => {
     const configuredModels = piConfig.models ?? [];
     expectSixLevels(configuredModels[0]?.thinkingLevelMap);
     expectSixLevels(configuredModels[1]?.thinkingLevelMap);
+  });
+
+  it("preserves max instead of letting partial maps fall back to xhigh", async () => {
+    const partialMap = { low: "low", medium: "medium", high: "high", xhigh: "xhigh" };
+    const normalized = normalizeThinkingLevelMap(true, partialMap);
+
+    expect(normalized).toEqual({ ...partialMap, max: "max", minimal: null });
+    expectSixLevels(normalized);
+
+    const fs = new MemoryFs();
+    fs.files.set(
+      path,
+      JSON.stringify({
+        providers: { relay: provider(model("partial", { thinkingLevelMap: partialMap })) },
+      }),
+    );
+    const persisted = await new ModelsJsonFile(fs, new WriteQueue(), path).read();
+
+    expect(persisted.providers.relay?.models[0]?.thinkingLevelMap).toEqual({
+      ...partialMap,
+      max: "max",
+      minimal: null,
+    });
+
+    const projected = virtualModelNode(
+      { id: "coding", name: "Coding", targets: [{ provider: "relay", modelId: "partial" }] },
+      { providers: { relay: provider(model("partial", { thinkingLevelMap: partialMap })) } },
+    );
+    expectSixLevels(projected?.thinkingLevelMap);
+
+    const piConfig = toPiProviderConfig({
+      name: "relay",
+      models: [model("partial", { thinkingLevelMap: partialMap })],
+    });
+    expectSixLevels(piConfig.models?.[0]?.thinkingLevelMap);
   });
 });

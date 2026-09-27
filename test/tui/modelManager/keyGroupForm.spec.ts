@@ -160,6 +160,23 @@ describe("KeyGroupForm", () => {
     expect(notify).not.toHaveBeenCalledWith(S.modelManager.keyGroupForm.saved);
   });
 
+  it("routes save failures to notifyError without exposing the API key", async () => {
+    const { deps } = await makeDeps({ providers: {} });
+    const notify = vi.fn();
+    const notifyError = vi.fn();
+    const secret = ["sk", "save-secret-123456"].join("-");
+    vi.spyOn(deps.modelsFile, "update").mockRejectedValue(new Error(`upstream ${secret}`));
+    const formDeps = { ...deps, notify, notifyError, onDone: vi.fn() };
+    const form = new KeyGroupForm(formDeps);
+
+    await setFormValues(form, { ...validValues, keys: secret });
+    await submit(form);
+
+    expect(notifyError).toHaveBeenCalledWith(S.modelManager.keyGroupForm.saveFailed);
+    expect(notify).not.toHaveBeenCalled();
+    expect(JSON.stringify(notifyError.mock.calls)).not.toContain(secret);
+  });
+
   it.each([
     ["prefix whitespace", { prefix: "relay name" }],
     ["prefix slash", { prefix: "relay/name" }],
@@ -176,7 +193,9 @@ describe("KeyGroupForm", () => {
       const { deps, fs } = await makeDeps({ providers: {} });
       const modelsUpdate = vi.spyOn(deps.modelsFile, "update");
       const configUpdate = vi.spyOn(deps.config, "update");
-      const form = new KeyGroupForm({ ...deps, onDone: vi.fn() });
+      const notifyError = vi.fn();
+      const formDeps = { ...deps, notifyError, onDone: vi.fn() };
+      const form = new KeyGroupForm(formDeps);
 
       await setFormValues(form, { ...validValues, ...override } as FormValues);
       await submit(form);
@@ -184,7 +203,8 @@ describe("KeyGroupForm", () => {
       expect(modelsUpdate).not.toHaveBeenCalled();
       expect(configUpdate).not.toHaveBeenCalled();
       expect(JSON.parse(fs.files.get(MODELS_PATH) ?? "null")).toEqual({ providers: {} });
-      expect(deps.notify).toHaveBeenCalledTimes(1);
+      expect(notifyError).toHaveBeenCalledTimes(1);
+      expect(deps.notify).not.toHaveBeenCalled();
     },
   );
 

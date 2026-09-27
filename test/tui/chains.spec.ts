@@ -486,24 +486,38 @@ describe("ChainsTab", () => {
     expect(registrar.syncFailover).toHaveBeenCalledTimes(2);
   });
 
-  it("resets every target in a chain after R confirmation", async () => {
-    const { deps, state, history } = await makeHarness([
-      chain("coding", [target("first"), target("second")]),
-    ]);
+  it("resets every Chain target after uppercase R confirmation", async () => {
+    const failed: TargetState = {
+      consecutiveFailures: 1,
+      cooldownLevel: 1,
+      cooldownUntil: new Date(60_000).toISOString(),
+      manualRecovery: false,
+      lastFailure: { ts: new Date(0).toISOString(), reason: "http-503" },
+    };
+    const initial = { "first/m": failed, "second/m": failed, "third/m": failed };
+    const { deps, state, history } = await makeHarness(
+      [chain("coding", [target("first"), target("second")]), chain("writing", [target("third")])],
+      initial,
+    );
     const tab = createTab(deps);
 
-    await tab.handleInput(Key.enter);
-    await tab.handleInput(Key.escape);
-    tab.handleInput("R");
+    await tab.handleInput("R");
+    expect(tab.render(78, 7).join("\n")).toContain("Reset 3 targets?");
+    expect(await state.read()).toEqual(initial);
     await tab.handleInput(Key.left);
     await tab.handleInput(Key.enter);
 
     expect(await state.read()).toEqual({
       "first/m": reset(),
       "second/m": reset(),
+      "third/m": reset(),
     });
-    expect(history.append).toHaveBeenCalledTimes(2);
-    expect(history.append.mock.calls.every(([event]) => event.reason === "manual")).toBe(true);
+    expect(history.append).toHaveBeenCalledTimes(3);
+    expect(history.append.mock.calls.map(([event]) => [event.from, event.reason])).toEqual([
+      ["first/m", "manual"],
+      ["second/m", "manual"],
+      ["third/m", "manual"],
+    ]);
   });
 
   it("resets every target in a chain after lowercase r confirmation", async () => {

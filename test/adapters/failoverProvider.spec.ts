@@ -490,6 +490,9 @@ describe("failover Provider adapter", () => {
     expect(harness.streamSimple.mock.calls[0]?.[2]).toMatchObject({ reasoning: "low" });
   });
 
+  // biome-ignore format: keep the boundary regression within the test module limit
+  it("normalizes a partial target map before the provider call", async () => { const harness = makeHarness({ thinkingLevel: "max", chains: [chain([target("relay", { reasoningEffort: "inherit" })])] }); harness.registry.find = vi.fn(() => ({ ...makeModel(), thinkingLevelMap: { low: "low", medium: "medium", high: "high", xhigh: "xhigh" } })); const outward = createFailoverProvider(harness.deps).config.streamSimple?.(virtualModel(), context()); await collect(outward as AssistantMessageEventStream); const [requestModel, , requestOptions] = harness.streamSimple.mock.calls[0] ?? []; expect(requestModel).toMatchObject({ thinkingLevelMap: { max: "max", minimal: null } }); expect(requestOptions).toMatchObject({ reasoning: "max" }); });
+
   it("omits reasoning when inherited Pi thinking is off", async () => {
     const harness = makeHarness({
       thinkingLevel: "off",

@@ -4,8 +4,8 @@ export const S = {
   memoryMode: "[memory mode]",
   needsTui: "pi-model-failover needs the TUI",
   commandDescription: "Manage providers, failover chains, history",
-  // biome-ignore format: keep failover error string together
-  failover: { failure: (chainName: string, chainId: string, details: Record<string, unknown>) => `Failover chain ${chainName} (${chainId}) failed at ${typeof details.target === "string" ? details.target : "-"}: status ${typeof details.status === "number" ? details.status : "unknown"}; reason ${typeof details.reason === "string" ? details.reason : "unknown"}` },
+  // biome-ignore format: keep failover error strings together
+  failover: { exhausted: (chainName: string, chainId: string, totalTargets: number, manualCount: number, activeCoolingCount: number) => `Failover chain ${chainName} (${chainId}) exhausted: ${totalTargets} total, ${manualCount} manual, ${activeCoolingCount} cooling down.`, failure: (chainName: string, chainId: string, details: Record<string, unknown>) => `Failover chain ${chainName} (${chainId}) failed at ${typeof details.target === "string" ? details.target : "-"}: status ${typeof details.status === "number" ? details.status : "unknown"}; reason ${typeof details.reason === "string" ? details.reason : "unknown"}` },
   // biome-ignore format: keep model switch and server quality strings together
   ...{ modelSwitch: { selected: (ref: string) => `Using ${ref}`, unavailable: "Selected model is not available", authMissing: (ref: string) => `No configured authentication for ${ref}`, failed: "Could not switch model" }, serverQualityDisabledWarning: "Server Quality timers are disabled; requests may wait until the provider or Pi aborts." },
   modelsJsonInvalid: "models.json is invalid",
@@ -176,8 +176,8 @@ export const S = {
       builtinImportFailed: "Could not import Pi built-in models",
       saveFailed: "Could not save catalog",
       deleteTitle: (count: number) => `Delete ${count} catalog model${count === 1 ? "" : "s"}?`,
-      deleteDetails: "Selected catalog models will be removed",
-      providerModelsUntouched: "Provider Models remain unchanged",
+      // biome-ignore format: keep catalog action strings together
+      ...{ deleteDetails: "Selected catalog models will be removed", providerModelsUntouched: "Provider Models remain unchanged", reasoningTitle: (count: number) => `Reasoning support (${count} selected)`, reasoningModel: (id: string, levels: string) => `${id}: ${levels}`, reasoningSupport: "Supported reasoning levels", reasoningNone: "none" },
     },
   },
   chains: {
@@ -313,6 +313,7 @@ export const S = {
         ["p", "Pi import"],
         ["+", "manual add"],
         ["e", "edit"],
+        ["t", "reasoning levels"],
         ["d", "delete"],
         ["/", "filter"],
         ["Esc", "back"],

@@ -440,4 +440,51 @@ describe("CatalogScreen", () => {
     expect(rendered).not.toContain(secret);
     expect(deps.notify).toHaveBeenCalledWith(S.modelManager.catalog.endpointImportFailed);
   });
+
+  it("batch edits reasoning support for marked catalog models with t", async () => {
+    const levels = {
+      off: "off",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    };
+    const first = { ...catalogModel("first"), reasoning: true, thinkingLevelMap: levels };
+    const second = { ...catalogModel("second"), reasoning: true, thinkingLevelMap: levels };
+    const untouched = catalogModel("untouched");
+    const { deps } = await makeDeps({ catalog: [first, second, untouched] });
+    const screen = new CatalogScreen(deps);
+
+    await input(screen, Key.space);
+    await input(screen, Key.down);
+    await input(screen, Key.space);
+    await input(screen, "t");
+
+    const editor = screen.render(120, 12).join("\n");
+    expect(editor).toContain("first");
+    expect(editor).toContain("second");
+    expect(editor).toContain("max");
+
+    await input(screen, Key.enter);
+    const menu = screen.render(120, 7).join("\n");
+    for (const level of ["off", "low", "medium", "high", "xhigh", "max"]) {
+      expect(menu).toContain(`[x] ${level}`);
+    }
+    for (let index = 0; index < 5; index++) await input(screen, Key.down);
+    await input(screen, Key.space);
+    await input(screen, Key.ctrl("s"));
+
+    const saved = deps.config.get().catalog;
+    expect(saved[0]?.thinkingLevelMap).toEqual({
+      off: "off",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: null,
+    });
+    expect(saved[1]?.thinkingLevelMap).toEqual(saved[0]?.thinkingLevelMap);
+    expect(saved[2]).toEqual(untouched);
+  });
 });

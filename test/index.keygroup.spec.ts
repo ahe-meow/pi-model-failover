@@ -85,7 +85,7 @@ describe("Key Group entry notification", () => {
     expect(notify).not.toHaveBeenCalledWith(S.modelManager.keyGroupForm.saved, "warning");
   });
 
-  it("keeps validation failures at warning severity", async () => {
+  it("reports validation failures at error severity", async () => {
     const pi = await makePi();
     await factory(pi as never);
     const notify = vi.fn();
@@ -104,8 +104,8 @@ describe("Key Group entry notification", () => {
     });
 
     await vi.waitFor(() =>
-      expect(notify).toHaveBeenCalledWith(S.modelManager.keyGroupForm.invalidPrefix, "warning"),
+      expect(notify).toHaveBeenCalledWith(S.modelManager.keyGroupForm.invalidPrefix, "error"),
     );
-    expect(notify).not.toHaveBeenCalledWith(S.modelManager.keyGroupForm.invalidPrefix, "info");
+    expect(notify).not.toHaveBeenCalledWith(S.modelManager.keyGroupForm.invalidPrefix, "warning");
   });
 });

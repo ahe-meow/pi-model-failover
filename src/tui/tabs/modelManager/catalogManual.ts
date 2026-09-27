@@ -1,9 +1,11 @@
 import { truncateToWidth } from "@earendil-works/pi-tui";
+import { CATALOG_DEFAULTS } from "../../../domain/catalog.js";
 import type { CatalogModel } from "../../../domain/types.js";
 import { S } from "../../../strings.js";
 import type { Confirm } from "../../primitives/confirm.js";
 import { Form } from "../../primitives/form.js";
 import { theme } from "../../primitives/theme.js";
+import type { TabComponent } from "../history.js";
 import { catalogManualFields, fitCatalogBody } from "./forms.js";
 
 export function createCatalogManualForm(
@@ -54,6 +56,61 @@ export function renderCatalogManual(
     truncateToWidth(theme.title(S.modelManager.catalog.manualTitle), width),
     ...fitCatalogBody(body, width, listRows, focus),
   ];
+}
+
+export class CatalogManualEditor implements TabComponent {
+  private readonly form: Form;
+  private error: string | undefined;
+
+  constructor(
+    model: CatalogModel | undefined,
+    private readonly notify: (message: string) => void,
+    save: (model: CatalogModel) => void,
+    cancel: () => void,
+  ) {
+    const defaults = structuredClone(model?.defaults ?? CATALOG_DEFAULTS.defaults);
+    this.form = createCatalogManualForm(
+      model,
+      (values) => {
+        const next = parseCatalogModel(values, defaults);
+        if (typeof next === "string") {
+          this.error = next;
+          this.notify(next);
+          return;
+        }
+        save(next);
+      },
+      () => {
+        this.error = undefined;
+        cancel();
+      },
+    );
+  }
+
+  render(width: number, listRows: number): string[] {
+    return renderCatalogManual(this.form, this.error, width, listRows);
+  }
+
+  handleInput(data: string): void {
+    this.form.handleInput(data);
+  }
+
+  isEditing(): boolean {
+    return this.form.isEditing();
+  }
+
+  hints(): Array<[string, string]> {
+    return S.hints.form;
+  }
+
+  showError(message: string): void {
+    this.error = message;
+    this.notify(message);
+  }
+
+  helpTitle(): string {
+    return S.modelManager.catalog.manualTitle;
+  }
 }
 
 export function renderCatalogConfirm(

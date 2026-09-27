@@ -84,8 +84,9 @@ function makeDeps(
     body: "upstream api_key=super-secret",
   },
   settingsOverrides: Partial<Settings> = {},
+  initialState: Record<TargetRef, TargetState> = {},
 ) {
-  let state: Record<TargetRef, TargetState> = {};
+  let state = structuredClone(initialState);
   const history: unknown[] = [];
   const config = {
     get: () => ({
@@ -128,6 +129,56 @@ async function collect(stream: AssistantMessageEventStream): Promise<AssistantMe
   for await (const event of stream) events.push(event);
   return events;
 }
+
+describe("unavailable failover errors", () => {
+  it("maps request-start exhaustion to counts without exposing internal details", async () => {
+    const deps = makeDeps(
+      undefined,
+      {},
+      {
+        "relay/m": {
+          consecutiveFailures: 0,
+          cooldownLevel: 0,
+          cooldownUntil: null,
+          manualRecovery: true,
+          lastFailure: null,
+        },
+        "backup/n": {
+          consecutiveFailures: 0,
+          cooldownLevel: 0,
+          cooldownUntil: null,
+          manualRecovery: true,
+          lastFailure: null,
+        },
+      },
+    );
+    const outward = createFailoverProvider(deps).config.streamSimple?.(
+      {
+        id: "coding",
+        name: "Coding Chain",
+        api: "pi-model-failover",
+        provider: "failover",
+        baseUrl: "https://failover.invalid",
+        reasoning: false,
+        input: ["text"],
+        contextWindow: 8_000,
+        maxTokens: 1_000,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      } as Model<Api>,
+      context,
+    );
+    const events = await collect(outward as AssistantMessageEventStream);
+    const message = String(
+      (events[0] as Extract<AssistantMessageEvent, { type: "error" }>).error.errorMessage,
+    );
+
+    expect(events).toHaveLength(1);
+    expect(message).toBe(
+      "Failover chain Coding Chain (coding) exhausted: 2 total, 2 manual, 0 cooling down.",
+    );
+    expect(deps.historyRecords).toHaveLength(0);
+  });
+});
 
 describe("detailed final failover errors", () => {
   it("reports chain, final target, status, and reason without the raw response body", async () => {

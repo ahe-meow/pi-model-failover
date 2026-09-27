@@ -45,13 +45,18 @@ export function normalizeThinkingLevelMap(
     return reasoning ? { minimal: null, xhigh: "xhigh", max: "max" } : undefined;
   }
   if (!reasoning) return { ...thinkingLevelMap };
-  return { ...thinkingLevelMap, minimal: null };
+  return {
+    ...thinkingLevelMap,
+    minimal: null,
+    max: thinkingLevelMap.max === undefined ? "max" : thinkingLevelMap.max,
+  };
 }
 
 export interface CatalogModel {
   id: string;
   name?: string;
   reasoning: boolean;
+  thinkingLevelMap?: Record<string, string | null>;
   vision: boolean;
   contextWindow: number;
   maxTokens: number;
@@ -96,6 +101,18 @@ export interface FailoverErrorDetails {
   status?: number;
   code?: string;
   body?: string;
+}
+export class TargetExhaustionError extends Error {
+  constructor(
+    readonly chainName: string,
+    readonly chainId: string,
+    readonly totalTargets: number,
+    readonly manualCount: number,
+    readonly activeCoolingCount: number,
+  ) {
+    super("no targets available");
+    this.name = "TargetExhaustionError";
+  }
 }
 export interface FailoverEvent {
   ts: string;

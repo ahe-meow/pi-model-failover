@@ -458,11 +458,11 @@ describe("runChain", () => {
     ).rejects.toMatchObject({ status: 503 });
     expect(sent).toEqual(["a/m", "b/m"]);
     expect(history).toHaveLength(2);
-    expect(history.map(({ from, to }) => [from, to])).toEqual([
-      ["a/m", "b/m"],
-      ["b/m", "c/m"],
-    ]);
+    // biome-ignore format: keep the fallback order assertion compact
+    expect(history.map(({ from, to }) => [from, to])).toEqual([["a/m", "b/m"], ["b/m", "c/m"]]);
   });
+  // biome-ignore format: keep request-start boundary test compact
+  it("selects a cooldown whose expiry equals the request-start time", async () => await collect(runChain(makeEngine({ initialState: { "a/m": applyFailure(reset(), "http-503", -60_000) }, send: async () => successfulAttempt("from-a") }).deps, chainOf(target("a")), settings(), 9, signal)));
   it("switch never retries after a cooldown-class failure", async () => {
     const sent: string[] = [];
     const history: FailoverEvent[] = [];
@@ -484,8 +484,7 @@ describe("runChain", () => {
         ),
       ),
     ).resolves.toEqual(["from-b"]);
-    expect(sent).toEqual(["a/m", "b/m"]);
-    expect(history).toHaveLength(1);
+    expect([sent, history.length]).toEqual([["a/m", "b/m"], 1]);
   });
   it("C15: compatibility retry strips one parameter without state or history", async () => {
     const stripped: string[][] = [];

@@ -351,7 +351,7 @@ export class KeyGroupForm implements TabComponent {
     const parsed = parseValues(values);
     if (typeof parsed === "string") {
       this.error = parsed;
-      this.deps.notify(parsed);
+      (this.deps.notifyError ?? this.deps.notify)(parsed);
       return;
     }
     this.error = undefined;
@@ -382,7 +382,7 @@ export class KeyGroupForm implements TabComponent {
         config.keyGroups.push(group);
       });
     } catch {
-      this.deps.notify(S.modelManager.keyGroupForm.saveFailed);
+      (this.deps.notifyError ?? this.deps.notify)(S.modelManager.keyGroupForm.saveFailed);
       return;
     }
 

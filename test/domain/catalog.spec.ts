@@ -3,6 +3,8 @@ import {
   CATALOG_DEFAULTS,
   isDrifted,
   removeCatalogModel,
+  setCatalogReasoningLevels,
+  supportedReasoningLevels,
   syncAttributes,
   toModelNode,
   upsertCatalogModel,
@@ -84,6 +86,51 @@ describe("catalog defaults and immutable catalog operations", () => {
     expect(next[1]?.defaults).not.toBe(added.defaults);
   });
 
+  it("updates selected reasoning levels without mutating other catalog models", () => {
+    const first: CatalogModel = {
+      ...otherCatalogModel,
+      id: "first",
+      thinkingLevelMap: {
+        off: "off",
+        low: "low",
+        medium: "medium",
+        high: "high",
+        xhigh: "xhigh",
+        max: "max",
+      },
+    };
+    const second = { ...otherCatalogModel, id: "second" };
+    const catalog = [first, second];
+
+    expect(supportedReasoningLevels(first)).toEqual([
+      "off",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+
+    const next = setCatalogReasoningLevels(catalog, ["first"], ["off", "high", "max"]);
+
+    expect(next).toEqual([
+      {
+        ...first,
+        thinkingLevelMap: {
+          off: "off",
+          low: null,
+          medium: null,
+          high: "high",
+          xhigh: null,
+          max: "max",
+        },
+      },
+      second,
+    ]);
+    expect(next).not.toBe(catalog);
+    expect(catalog[0]).toEqual(first);
+  });
+
   it("C5: removes only the requested catalog id without mutating the input array", () => {
     const catalog = [catalogModel, otherCatalogModel];
 
@@ -127,6 +174,25 @@ describe("catalog model nodes", () => {
 
     expect(copy.input).toEqual(["text"]);
     expect(Object.hasOwn(copy, "name")).toBe(false);
+  });
+
+  it("carries catalog reasoning levels into a Provider Model node", () => {
+    const reasoning = {
+      ...otherCatalogModel,
+      thinkingLevelMap: {
+        off: "off",
+        low: null,
+        medium: null,
+        high: "high",
+        xhigh: null,
+        max: "max",
+      },
+    };
+
+    expect(toModelNode(reasoning)).toMatchObject({
+      reasoning: true,
+      thinkingLevelMap: reasoning.thinkingLevelMap,
+    });
   });
 });
 

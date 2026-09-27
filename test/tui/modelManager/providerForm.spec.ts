@@ -4,6 +4,7 @@ import { ModelsJsonFile } from "../../../src/adapters/modelsJson.js";
 import { ConfigStore } from "../../../src/config/configStore.js";
 import { WriteQueue } from "../../../src/config/writeQueue.js";
 import type { ModelsJson, ProviderNode } from "../../../src/domain/types.js";
+import { S } from "../../../src/strings.js";
 import { ProviderForm } from "../../../src/tui/tabs/modelManager/forms.js";
 import type { ModelManagerDeps } from "../../../src/tui/tabs/modelManager.js";
 import { MemoryFs } from "../../fakes/memoryFs.js";
@@ -103,11 +104,61 @@ describe("ProviderForm name normalization", () => {
     expect((await deps.modelsFile.read()).providers.relay?.name).toBe("Bad-Name-One");
   });
 
+  it("trims a non-empty Provider name before saving", async () => {
+    const { deps } = await makeDeps();
+    const form = new ProviderForm({
+      ...deps,
+      providerId: "relay",
+      mode: "rename",
+      onDone: vi.fn(),
+      onCancel: vi.fn(),
+    });
+
+    await clearText(form, "Relay".length);
+    for (const character of "  Renamed  ") await input(form, character);
+    await input(form, Key.ctrl("s"));
+
+    expect((await deps.modelsFile.read()).providers.relay?.name).toBe("Renamed");
+  });
+
+  it("trims a Provider name during a full edit", async () => {
+    const { deps } = await makeDeps();
+    const form = new ProviderForm({
+      ...deps,
+      providerId: "relay",
+      onDone: vi.fn(),
+      onCancel: vi.fn(),
+    });
+
+    await submitProviderName(form, "  Renamed  ");
+
+    expect((await deps.modelsFile.read()).providers.relay?.name).toBe("Renamed");
+  });
+
+  it("keeps Provider ID validation strict instead of normalizing the ID", async () => {
+    const { deps } = await makeDeps();
+    const form = new ProviderForm({
+      ...deps,
+      providerId: "relay",
+      onDone: vi.fn(),
+      onCancel: vi.fn(),
+    });
+
+    await clearText(form, "relay".length);
+    for (const character of "bad/id") await input(form, character);
+    for (let index = 0; index < 7; index++) await input(form, Key.down);
+    await input(form, Key.ctrl("s"));
+
+    expect(deps.notify).toHaveBeenCalledWith(S.modelManager.providerForm.invalidId);
+    expect((await deps.modelsFile.read()).providers.relay).toBeDefined();
+    expect((await deps.modelsFile.read()).providers["bad-id"]).toBeUndefined();
+  });
+
   it("adds a provider with an illegal name normalized to hyphens", async () => {
     const { deps } = await makeDeps({ providers: {} });
     const form = new ProviderForm({ ...deps, onDone: vi.fn(), onCancel: vi.fn() });
 
-    await setProviderAddValues(form, "Bad Name/One");
+    await setProviderAddValues(form, "  Bad Name/One  ");
 
     const saved = await deps.modelsFile.read();
     expect(saved.providers["Bad-Name-One"]?.name).toBe("Bad-Name-One");

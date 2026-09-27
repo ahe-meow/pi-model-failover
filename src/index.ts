@@ -288,6 +288,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
           registrar,
           notify: (message) => latestNotify?.(message),
           notifyInfo: (message) => ctx.ui.notify(message, "info"),
+          notifyError: (message) => ctx.ui.notify(message, "error"),
           useModel,
           now,
           sessionId,

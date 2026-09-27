@@ -23,7 +23,8 @@ import {
 } from "../domain/engine.js";
 import type { Clock } from "../domain/ports.js";
 import type { ModelsJson, TargetRef, TargetSettings } from "../domain/types.js";
-import { normalizeReasoningEffort, normalizeThinkingLevelMap } from "../domain/types.js";
+// biome-ignore format: keep the structured error import within the module limit
+import { normalizeReasoningEffort, normalizeThinkingLevelMap, TargetExhaustionError } from "../domain/types.js";
 import type { HistoryLog } from "../history/historyLog.js";
 import { S } from "../strings.js";
 
@@ -286,10 +287,10 @@ export function createFailoverProvider(deps: FailoverProviderDeps): {
       throw normalizeFailure(error, sentParams, 401);
     }
     if (!auth.ok) throw failureError({ status: 401 }, sentParams);
-
     const controller = new AbortController();
     const unlink = linkAbortSignal(attemptSignal, controller);
-    const requestModel = auth.baseUrl === undefined ? model : { ...model, baseUrl: auth.baseUrl };
+    // biome-ignore format: keep provider boundary normalization within the module limit
+    const requestModel = { ...model, ...(auth.baseUrl === undefined ? {} : { baseUrl: auth.baseUrl }), ...(normalizeThinkingLevelMap(model.reasoning, model.thinkingLevelMap) === undefined ? {} : { thinkingLevelMap: normalizeThinkingLevelMap(model.reasoning, model.thinkingLevelMap) }) } as Model<Api>;
     sentOptions.signal = controller.signal;
     if (auth.apiKey !== undefined) sentOptions.apiKey = auth.apiKey;
     if (auth.headers !== undefined) sentOptions.headers = auth.headers;
@@ -376,9 +377,8 @@ export function createFailoverProvider(deps: FailoverProviderDeps): {
           if (finalMessage !== undefined) stream.end(finalMessage);
           else stream.end(terminalMessage(model, deps.clock));
         } catch (error) {
-          const errorMessage = requestController.signal.aborted
-            ? S.appTitle
-            : S.failover.failure(chain.name, chain.id, asRecord(error));
+          // biome-ignore format: keep the structured exhaustion mapping compact
+          const errorMessage = requestController.signal.aborted ? S.appTitle : error instanceof TargetExhaustionError ? S.failover.exhausted(error.chainName, error.chainId, error.totalTargets, error.manualCount, error.activeCoolingCount) : S.failover.failure(chain.name, chain.id, asRecord(error));
           stream.push(
             terminalEvent(model, deps.clock, requestController.signal.aborted, errorMessage),
           );

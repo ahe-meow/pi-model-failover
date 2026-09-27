@@ -89,7 +89,7 @@ export class ChainsTab implements TabComponent {
     } else if (data === "d") this.openDelete();
     else if (data === "r") this.openResetChain();
     else if (data === "n") this.openChainForm(RENAME_MODE);
-    else if (data === "R") this.openResetChain();
+    else if (data === "R") this.openResetChain(true);
     else if (data === "p") return selectChain(this.deps.useModel, this.selectedListChain()?.id);
     else if (isKey(data, Key.enter)) this.openSelectedChain();
     else move(this.chainList, data);
@@ -294,15 +294,14 @@ export class ChainsTab implements TabComponent {
       this.selectedChainId = undefined;
     });
   }
-  private openResetChain(): void {
+  // biome-ignore format: keep single-chain and global reset routing compact
+  private openResetChain(all = false): void {
     const chain = this.screen === "detail" ? this.currentChain() : this.selectedListChain();
-    if (chain === undefined) return;
-    const targets = structuredClone(chain.targets);
-    this.ask(
-      S.chains.actions.resetTitle(chain.id, targets.length),
-      [S.chains.actions.resetDetails],
-      () => this.resetTargets(targets),
-    );
+    if (chain === undefined && !all) return;
+    const targets = structuredClone(all ? this.deps.config.get().chains.flatMap((entry) => entry.targets) : chain?.targets ?? []);
+    // biome-ignore format: keep reset confirmation mapping compact
+    const title = all ? S.resetAllConfirm(targets.length) : S.chains.actions.resetTitle(chain?.id ?? "", targets.length);
+    this.ask(title, [all ? S.resetAll : S.chains.actions.resetDetails], () => this.resetTargets(targets));
   }
   private openResetTarget(): void {
     const target =

@@ -41,14 +41,23 @@ export interface PiComponent {
 export function createApp(deps: AppDeps): PiComponent {
   const bar = new TabBar([...S.tabs]);
   const help = new HelpOverlay([]);
-  const unsubscribeConfig = deps.config.onChange(() => deps.requestRender?.());
+  let lastHeight = 12;
+  let disposed = false;
+  let renderTimer: ReturnType<typeof setTimeout> | undefined;
+  const requestRender = (): void => {
+    if (disposed || renderTimer !== undefined) return;
+    renderTimer = setTimeout(() => {
+      renderTimer = undefined;
+      if (!disposed) deps.requestRender?.();
+    }, 0);
+  };
   const modelManagerDeps: ModelManagerDeps = {
     ...deps,
     modelsFile: {
       ...deps.modelsFile,
       update: async (update, options) => {
         const next = await deps.modelsFile.update(update, options);
-        deps.requestRender?.();
+        requestRender();
         return next;
       },
     },
@@ -59,12 +68,13 @@ export function createApp(deps: AppDeps): PiComponent {
     new HistoryTab(deps),
     new SettingsTab(deps.config, deps.resetAll, deps.countTargets),
   ];
-  let lastHeight = 12;
-  let disposed = false;
+  const unsubscribeConfig = deps.config.onChange(() => requestRender());
 
   const dispose = (): void => {
     if (disposed) return;
     disposed = true;
+    if (renderTimer !== undefined) clearTimeout(renderTimer);
+    renderTimer = undefined;
     unsubscribeConfig();
     for (const tab of tabs) tab.dispose?.();
   };
