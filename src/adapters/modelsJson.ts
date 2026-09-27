@@ -124,8 +124,6 @@ function isCompleteProviderNode(value: unknown): value is ProviderNode {
   return (
     isProviderNode(value) &&
     typeof value.name === "string" &&
-    typeof value.baseUrl === "string" &&
-    isApiType(value.api) &&
     Array.isArray(value.models) &&
     value.models.every(isCompleteModelNode)
   );

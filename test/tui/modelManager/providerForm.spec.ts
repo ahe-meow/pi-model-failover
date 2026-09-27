@@ -154,6 +154,44 @@ describe("ProviderForm name normalization", () => {
     expect((await deps.modelsFile.read()).providers["bad-id"]).toBeUndefined();
   });
 
+  it("saves a provider when another Pi provider defines API and URL per model", async () => {
+    const models = source();
+    models.providers.scoped = {
+      name: "Model-scoped",
+      models: [
+        {
+          id: "m",
+          api: "openai-responses",
+          baseUrl: "https://scoped.example/v1",
+          reasoning: false,
+          input: ["text"],
+          contextWindow: 1000,
+          maxTokens: 100,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+      ],
+    };
+    const { deps } = await makeDeps(models);
+    const form = new ProviderForm({
+      ...deps,
+      providerId: "relay",
+      onDone: vi.fn(),
+      onCancel: vi.fn(),
+    });
+
+    await submitProviderName(form, "Renamed");
+
+    const saved = await deps.modelsFile.read();
+    expect(saved.providers.relay?.name).toBe("Renamed");
+    expect(deps.notify).not.toHaveBeenCalled();
+    expect(saved.providers.scoped?.api).toBeUndefined();
+    expect(saved.providers.scoped?.baseUrl).toBeUndefined();
+    expect(saved.providers.scoped?.models[0]).toMatchObject({
+      api: "openai-responses",
+      baseUrl: "https://scoped.example/v1",
+    });
+  });
+
   it("adds a provider with an illegal name normalized to hyphens", async () => {
     const { deps } = await makeDeps({ providers: {} });
     const form = new ProviderForm({ ...deps, onDone: vi.fn(), onCancel: vi.fn() });
