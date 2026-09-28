@@ -16,6 +16,7 @@ import { SharedState } from "./config/sharedState.js";
 import { WriteQueue } from "./config/writeQueue.js";
 import { dropProvider, renameProviderRefs } from "./domain/chains.js";
 import { reset } from "./domain/cooldown.js";
+import { syncFailoverVirtualModels } from "./domain/providers.js";
 import type {
   Chain,
   FailoverEvent,
@@ -214,16 +215,21 @@ export default async function (pi: ExtensionAPI): Promise<void> {
         },
         thinkingLevel: () => thinkingLevel,
       }).config,
+    async (virtualModels) => {
+      models = await modelsFile.update((current) =>
+        syncFailoverVirtualModels(current, virtualModels),
+      );
+    },
   );
   let models = await modelsFile.read();
   registrar.syncOwned(models);
-  registrar.syncFailover(config.get().chains, models);
+  await registrar.syncFailover(config.get().chains, models);
   const modelManagerModelsFile: AppDeps["modelsFile"] = {
     read: () => modelsFile.read(),
     update: async (update, options?: ModelsFileUpdateOptions) => {
       const next = await modelsFile.update(update);
       models = structuredClone(next);
-      if (!options?.deferFailoverSync) registrar.syncFailover(config.get().chains, next);
+      if (!options?.deferFailoverSync) await registrar.syncFailover(config.get().chains, next);
       return next;
     },
   };
@@ -235,7 +241,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     models = await modelsFile.read();
     setStatusContext(ctx);
     registrar.syncOwned(models);
-    registrar.syncFailover(config.get().chains, models);
+    await registrar.syncFailover(config.get().chains, models);
   };
   pi.on("session_start", refresh);
 
@@ -307,7 +313,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
               value.chains = dropProvider(value.chains, providerId);
             });
             registrar.syncOwned(nextModels);
-            registrar.syncFailover(config.get().chains, nextModels);
+            await registrar.syncFailover(config.get().chains, nextModels);
           },
           afterProviderRename: async (previousId, providerId, nextModels) => {
             await config.update((value) => {
@@ -323,7 +329,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
               }
             });
             registrar.syncOwned(nextModels);
-            registrar.syncFailover(config.get().chains, nextModels);
+            await registrar.syncFailover(config.get().chains, nextModels);
           },
           close: () => done(undefined),
         };

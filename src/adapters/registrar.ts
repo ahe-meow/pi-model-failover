@@ -1,5 +1,5 @@
 import type { ProviderConfig } from "@earendil-works/pi-coding-agent";
-import type { Chain, ModelsJson } from "../domain/types.js";
+import type { Chain, ModelNode, ModelsJson } from "../domain/types.js";
 import { S } from "../strings.js";
 
 export interface PiRegistrar {
@@ -10,6 +10,8 @@ export interface PiRegistrar {
 
 export type FailoverConfigFactory = (chains: Chain[], models: ModelsJson) => ProviderConfig;
 
+export type FailoverModelsPersister = (models: ModelNode[]) => Promise<void>;
+
 export class Registrar {
   private readonly registered = new Set<string>();
   private failoverRegistered = false;
@@ -18,6 +20,7 @@ export class Registrar {
     private readonly pi: PiRegistrar,
     private readonly notify: (message: string) => void,
     private readonly createFailoverConfig: FailoverConfigFactory,
+    private readonly persistFailoverModels?: FailoverModelsPersister,
   ) {}
 
   syncOwned(models: ModelsJson): void {
@@ -49,7 +52,7 @@ export class Registrar {
     }
   }
 
-  syncFailover(chains: Chain[], models: ModelsJson): void {
+  async syncFailover(chains: Chain[], models: ModelsJson): Promise<void> {
     if (this.pi.isBuiltin("failover")) {
       this.notify(S.registrar.builtinSkipped("failover"));
       return;
@@ -63,15 +66,17 @@ export class Registrar {
       return;
     }
 
-    if ((config.models?.length ?? 0) === 0) {
-      if (this.failoverRegistered) {
-        this.pi.unregisterProvider("failover");
-        this.failoverRegistered = false;
-      }
-      return;
-    }
-
+    // SAFETY: createFailoverConfig projects complete ModelNodes from the Chain's first Targets.
+    const virtualModels = (config.models ?? []) as unknown as ModelNode[];
     try {
+      await this.persistFailoverModels?.(virtualModels);
+      if (virtualModels.length === 0) {
+        if (this.failoverRegistered) {
+          this.pi.unregisterProvider("failover");
+          this.failoverRegistered = false;
+        }
+        return;
+      }
       this.pi.registerProvider("failover", config);
       this.failoverRegistered = true;
     } catch {

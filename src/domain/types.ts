@@ -5,6 +5,8 @@ export type ApiType =
   | "openai-responses"
   | "anthropic-messages"
   | "google-generative-ai";
+export const FAILOVER_PROVIDER_API = "pi-model-failover" as const;
+export type ProviderApiType = ApiType | typeof FAILOVER_PROVIDER_API;
 export type TargetRef = `${string}/${string}`;
 export type ErrorHandlingMode = "smart" | "switch" | "retry";
 export type FailureClass = "cooldown" | "persistent" | "compat-retry" | "server-quality";
@@ -128,7 +130,7 @@ export interface FailoverEvent {
 export interface ModelNode {
   id: string;
   name?: string;
-  api?: ApiType;
+  api?: ProviderApiType;
   baseUrl?: string;
   reasoning: boolean;
   thinkingLevelMap?: Record<string, string | null>;
@@ -143,7 +145,7 @@ export interface ModelNode {
 export interface ProviderNode {
   name: string;
   baseUrl?: string;
-  api?: ApiType;
+  api?: ProviderApiType;
   apiKey?: string;
   authHeader?: boolean;
   headers?: Record<string, string>;
@@ -151,6 +153,7 @@ export interface ProviderNode {
   modelOverrides?: Record<string, unknown>;
   models: ModelNode[];
   piModelFailover?: { group: string | null; costMultiplier: number };
+  piModelFailoverVirtual?: true;
   piModelManager?: { managed: boolean };
   [k: string]: unknown;
 }

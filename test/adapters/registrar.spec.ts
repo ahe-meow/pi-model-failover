@@ -122,32 +122,33 @@ describe("Registrar", () => {
     expect(pi.unregistered).toEqual([]);
   });
 
-  it("registers, replaces, and unregisters failover Virtual Models", () => {
+  it("registers, replaces, and empties failover Virtual Models", async () => {
     const pi = new FakePiRegistrar();
     const notify = vi.fn();
     const factory = vi.fn(failoverConfig);
     const registrar = new Registrar(pi, notify, factory);
     const models: ModelsJson = { providers: { relay: ownedProvider("relay") } };
 
-    registrar.syncFailover([chainWithModel()], models);
+    await registrar.syncFailover([chainWithModel()], models);
     expect(pi.attempted.at(-1)).toMatchObject({
       id: "failover",
       config: { models: [{ id: "coding", name: "Coding" }] },
     });
     expect(factory).toHaveBeenLastCalledWith([chainWithModel()], models);
 
-    registrar.syncFailover([chainWithModel("renamed", "Renamed")], models);
+    await registrar.syncFailover([chainWithModel("renamed", "Renamed")], models);
     expect(pi.attempted.at(-1)).toMatchObject({
       id: "failover",
       config: { models: [{ id: "renamed", name: "Renamed" }] },
     });
 
-    registrar.syncFailover([], models);
+    await registrar.syncFailover([], models);
     expect(pi.unregistered).toContain("failover");
+    expect(pi.configs.has("failover")).toBe(false);
     expect(notify).not.toHaveBeenCalled();
   });
 
-  it("unregisters failover when an ordinary sync sees a missing target provider", () => {
+  it("unregisters failover when an ordinary sync sees a missing target provider", async () => {
     const pi = new FakePiRegistrar();
     const notify = vi.fn();
     const factory: FailoverConfigFactory = (chains, models) =>
@@ -155,20 +156,20 @@ describe("Registrar", () => {
     const registrar = new Registrar(pi, notify, factory);
     const completeModels: ModelsJson = { providers: { relay: ownedProvider("relay") } };
 
-    registrar.syncFailover([chainWithModel()], completeModels);
-    registrar.syncFailover([chainWithModel()], { providers: {} });
+    await registrar.syncFailover([chainWithModel()], completeModels);
+    await registrar.syncFailover([chainWithModel()], { providers: {} });
 
     expect(pi.unregistered).toContain("failover");
     expect(pi.configs.has("failover")).toBe(false);
     expect(notify).not.toHaveBeenCalled();
   });
 
-  it("skips a built-in failover id and notifies once", () => {
+  it("skips a built-in failover id and notifies once", async () => {
     const notify = vi.fn();
     const pi = new FakePiRegistrar({ builtin: "failover" });
     const registrar = new Registrar(pi, notify, emptyFailoverFactory);
 
-    registrar.syncFailover([chainWithModel()], { providers: {} });
+    await registrar.syncFailover([chainWithModel()], { providers: {} });
 
     expect(pi.attempted).toEqual([]);
     expect(pi.registered).toEqual([]);
@@ -176,11 +177,11 @@ describe("Registrar", () => {
     expect(notify).toHaveBeenCalledWith(S.registrar.builtinSkipped("failover"));
   });
 
-  it("keeps the failover registration state separate from owned providers", () => {
+  it("keeps the failover registration state separate from owned providers", async () => {
     const pi = new FakePiRegistrar();
     const registrar = new Registrar(pi, vi.fn(), emptyFailoverFactory);
 
-    registrar.syncFailover([chainWithModel()], { providers: {} });
+    await registrar.syncFailover([chainWithModel()], { providers: {} });
     registrar.syncOwned({ providers: {} });
 
     expect(pi.unregistered).not.toContain("failover");

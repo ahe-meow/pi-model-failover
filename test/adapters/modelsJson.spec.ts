@@ -123,6 +123,59 @@ describe("ModelsJsonFile", () => {
     expect(result.unknownRoot).toEqual({ keep: true });
   });
 
+  it("round-trips the reserved custom failover API with model-scoped endpoints", async () => {
+    const fs = new MemoryFs();
+    fs.files.set(
+      path,
+      JSON.stringify({
+        providers: {
+          failover: {
+            name: "Failover",
+            api: "pi-model-failover",
+            piModelFailoverVirtual: true,
+            models: [
+              {
+                ...validModel,
+                id: "coding",
+                api: "pi-model-failover",
+                baseUrl: "https://failover.invalid",
+              },
+            ],
+          },
+        },
+      }),
+    );
+    const file = new ModelsJsonFile(fs, new WriteQueue(), path);
+
+    const result = await file.update((models) => models);
+
+    expect(result.providers.failover).toMatchObject({
+      api: "pi-model-failover",
+      piModelFailoverVirtual: true,
+      models: [{ id: "coding", api: "pi-model-failover", baseUrl: "https://failover.invalid" }],
+    });
+  });
+
+  it("keeps the failover API reserved to the virtual provider", async () => {
+    const fs = new MemoryFs();
+    fs.files.set(
+      path,
+      JSON.stringify({
+        providers: {
+          relay: {
+            name: "Relay",
+            api: "pi-model-failover",
+            models: [validModel],
+          },
+        },
+      }),
+    );
+
+    await expect(new ModelsJsonFile(fs, new WriteQueue(), path).read()).rejects.toThrow(
+      S.modelsJsonInvalid,
+    );
+  });
+
   it("normalizes reasoning capability maps for Pi with an explicit minimal null", async () => {
     const fs = new MemoryFs();
     fs.files.set(

@@ -32,7 +32,7 @@ function makeAppDeps(config: ConfigStore, overrides: Partial<AppDeps> = {}): App
     config,
     modelsFile,
     initialModels: structuredClone(models),
-    registrar: { syncOwned: () => {}, syncFailover: () => {} },
+    registrar: { syncOwned: () => {}, syncFailover: async () => {} },
     state: {
       read: async () => ({}),
       update: async () => {},

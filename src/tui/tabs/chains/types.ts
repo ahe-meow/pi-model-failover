@@ -8,7 +8,7 @@ export interface ChainsDeps {
   models: () => ModelsJson;
   state: SharedState;
   history: HistoryLog;
-  registrar: { syncFailover(chains: Chain[], models: ModelsJson): void };
+  registrar: { syncFailover(chains: Chain[], models: ModelsJson): Promise<void> };
   useModel?: (providerId: string, modelId: string) => Promise<void>;
   notify: (message: string) => void;
   now: () => string;
@@ -23,7 +23,7 @@ export const emptyChainsDeps = (): ChainsDeps =>
     models: () => ({ providers: {} }),
     state: { read: async () => ({}), update: async () => {} },
     history: { append: async () => {} },
-    registrar: { syncFailover: () => {} },
+    registrar: { syncFailover: async () => {} },
     notify: () => {},
     now: () => "1970-01-01T00:00:00.000Z",
     sessionId: "",

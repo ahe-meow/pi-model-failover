@@ -2,6 +2,7 @@ import type { WriteQueue } from "../config/writeQueue.js";
 import type { FileSystem } from "../domain/ports.js";
 import {
   type ApiType,
+  FAILOVER_PROVIDER_API,
   type ModelNode,
   type ModelsJson,
   normalizeThinkingLevelMap,
@@ -61,13 +62,17 @@ function isInputList(value: unknown): value is ("text" | "image")[] {
   return Array.isArray(value) && value.every((entry) => entry === "text" || entry === "image");
 }
 
-function isModelNode(value: unknown): value is Record<string, unknown> {
+function isModelNode(value: unknown, allowFailoverApi: boolean): value is Record<string, unknown> {
   return (
     isRecord(value) &&
     typeof value.id === "string" &&
     value.id.length > 0 &&
     hasOptional(value, "name", (entry) => typeof entry === "string") &&
-    hasOptional(value, "api", isApiType) &&
+    hasOptional(
+      value,
+      "api",
+      (entry) => isApiType(entry) || (allowFailoverApi && entry === FAILOVER_PROVIDER_API),
+    ) &&
     hasOptional(value, "baseUrl", (entry) => typeof entry === "string") &&
     hasOptional(value, "reasoning", (entry) => typeof entry === "boolean") &&
     hasOptional(value, "input", isInputList) &&
@@ -92,26 +97,39 @@ function isManagerMarker(value: unknown): value is NonNullable<ProviderNode["piM
   return isRecord(value) && typeof value.managed === "boolean";
 }
 
-function isProviderNode(value: unknown): value is Record<string, unknown> {
+function isProviderNode(value: unknown, id: string): value is Record<string, unknown> {
+  const allowFailoverApi =
+    id === "failover" && isRecord(value) && value.piModelFailoverVirtual === true;
   return (
     isRecord(value) &&
     hasOptional(value, "name", (entry) => typeof entry === "string") &&
     hasOptional(value, "baseUrl", (entry) => typeof entry === "string") &&
-    hasOptional(value, "api", isApiType) &&
+    hasOptional(
+      value,
+      "api",
+      (entry) => isApiType(entry) || (allowFailoverApi && entry === FAILOVER_PROVIDER_API),
+    ) &&
     hasOptional(value, "apiKey", (entry) => typeof entry === "string") &&
     hasOptional(value, "authHeader", (entry) => typeof entry === "boolean") &&
     hasOptional(value, "headers", isStringRecord) &&
     hasOptional(value, "compat", isRecord) &&
     hasOptional(value, "modelOverrides", isRecord) &&
-    hasOptional(value, "models", (entry) => Array.isArray(entry) && entry.every(isModelNode)) &&
+    hasOptional(
+      value,
+      "models",
+      (entry) =>
+        Array.isArray(entry) && entry.every((model) => isModelNode(model, allowFailoverApi)),
+    ) &&
     hasOptional(value, "piModelFailover", isOwnershipMarker) &&
+    hasOptional(value, "piModelFailoverVirtual", (entry) => entry === true) &&
+    (!Object.hasOwn(value, "piModelFailoverVirtual") || allowFailoverApi) &&
     hasOptional(value, "piModelManager", isManagerMarker)
   );
 }
 
-function isCompleteModelNode(value: unknown): value is ModelNode {
+function isCompleteModelNode(value: unknown, allowFailoverApi: boolean): value is ModelNode {
   return (
-    isModelNode(value) &&
+    isModelNode(value, allowFailoverApi) &&
     typeof value.reasoning === "boolean" &&
     isInputList(value.input) &&
     isFiniteNumber(value.contextWindow) &&
@@ -120,12 +138,14 @@ function isCompleteModelNode(value: unknown): value is ModelNode {
   );
 }
 
-function isCompleteProviderNode(value: unknown): value is ProviderNode {
+function isCompleteProviderNode(id: string, value: unknown): value is ProviderNode {
+  const allowFailoverApi =
+    id === "failover" && isRecord(value) && value.piModelFailoverVirtual === true;
   return (
-    isProviderNode(value) &&
+    isProviderNode(value, id) &&
     typeof value.name === "string" &&
     Array.isArray(value.models) &&
-    value.models.every(isCompleteModelNode)
+    value.models.every((model) => isCompleteModelNode(model, allowFailoverApi))
   );
 }
 
@@ -133,7 +153,7 @@ function zeroCost(): NonNullable<ModelNode["cost"]> {
   return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 }
 
-function normalizeModel(value: ModelNode): ModelNode {
+function normalizeModel(value: ModelNode, allowFailoverApi: boolean): ModelNode {
   const { name, api, baseUrl, thinkingLevelMap, headers, compat, ...rest } = value;
   const normalizedThinkingLevelMap = normalizeThinkingLevelMap(
     value.reasoning === true,
@@ -142,7 +162,7 @@ function normalizeModel(value: ModelNode): ModelNode {
   return {
     ...rest,
     ...(typeof name === "string" ? { name } : {}),
-    ...(isApiType(api) ? { api } : {}),
+    ...(isApiType(api) || (allowFailoverApi && api === FAILOVER_PROVIDER_API) ? { api } : {}),
     ...(typeof baseUrl === "string" ? { baseUrl } : {}),
     reasoning: value.reasoning === true,
     ...(normalizedThinkingLevelMap === undefined
@@ -159,17 +179,20 @@ function normalizeModel(value: ModelNode): ModelNode {
 
 function normalizeProvider(id: string, value: ProviderNode): ProviderNode {
   const { baseUrl, api, apiKey, authHeader, headers, compat, modelOverrides, ...rest } = value;
+  const allowFailoverApi = id === "failover" && value.piModelFailoverVirtual === true;
   return {
     ...rest,
     name: typeof value.name === "string" ? value.name : id,
     ...(typeof baseUrl === "string" ? { baseUrl } : {}),
-    ...(isApiType(api) ? { api } : {}),
+    ...(isApiType(api) || (allowFailoverApi && api === FAILOVER_PROVIDER_API) ? { api } : {}),
     ...(typeof apiKey === "string" ? { apiKey } : {}),
     ...(typeof authHeader === "boolean" ? { authHeader } : {}),
     ...(isStringRecord(headers) ? { headers } : {}),
     ...(isRecord(compat) ? { compat } : {}),
     ...(isRecord(modelOverrides) ? { modelOverrides } : {}),
-    models: Array.isArray(value.models) ? value.models.map(normalizeModel) : [],
+    models: Array.isArray(value.models)
+      ? value.models.map((model) => normalizeModel(model, allowFailoverApi))
+      : [],
   };
 }
 
@@ -178,7 +201,7 @@ function validateModelsJson(value: unknown): asserts value is ModelsJson {
     !isRecord(value) ||
     !Object.hasOwn(value, "providers") ||
     !isRecord(value.providers) ||
-    !Object.values(value.providers).every(isProviderNode)
+    !Object.entries(value.providers).every(([id, provider]) => isProviderNode(provider, id))
   ) {
     throw new Error(S.modelsJsonInvalid);
   }
@@ -189,7 +212,7 @@ function validateStrictModelsJson(value: unknown): asserts value is ModelsJson {
     !isRecord(value) ||
     !Object.hasOwn(value, "providers") ||
     !isRecord(value.providers) ||
-    !Object.values(value.providers).every(isCompleteProviderNode)
+    !Object.entries(value.providers).every(([id, provider]) => isCompleteProviderNode(id, provider))
   ) {
     throw new Error(S.modelsJsonInvalid);
   }

@@ -363,7 +363,7 @@ export class ChainsTab implements TabComponent {
   private async updateChains(transform: (chains: Chain[]) => Chain[]): Promise<void> {
     await this.deps.config.update((config) => (config.chains = transform(config.chains)));
     const chains = structuredClone(this.deps.config.get().chains);
-    this.deps.registrar.syncFailover(chains, this.deps.models());
+    await this.deps.registrar.syncFailover(chains, this.deps.models());
   }
 
   private ask(title: string, details: string[], action: () => Promise<void>): void {

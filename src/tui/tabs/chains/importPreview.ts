@@ -9,7 +9,7 @@ import { filterRows, renderFilterDraft, TextFilter } from "../../primitives/text
 import type { TabComponent } from "../history.js";
 
 const E = String();
-type Registrar = { syncFailover(chains: Chain[], models: ModelsJson): void };
+type Registrar = { syncFailover(chains: Chain[], models: ModelsJson): Promise<void> };
 
 export interface ImportPreviewOptions {
   config: ConfigStore;
@@ -154,7 +154,7 @@ export class ImportPreview implements TabComponent {
         const next = addTargets(chain, selected);
         chain.targets = next.targets;
       });
-      this.options.registrar.syncFailover(
+      await this.options.registrar.syncFailover(
         structuredClone(this.options.config.get().chains),
         this.options.models(),
       );

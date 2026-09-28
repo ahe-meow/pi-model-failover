@@ -1,16 +1,55 @@
-import type { ModelNode, ModelsJson, ProviderNode } from "./types.js";
+import {
+  FAILOVER_PROVIDER_API,
+  type ModelNode,
+  type ModelsJson,
+  type ProviderNode,
+} from "./types.js";
 
 const clone = (models: ModelsJson): ModelsJson => structuredClone(models);
 
 export function listProviders(
   models: ModelsJson,
 ): Array<{ id: string; node: ProviderNode; owned: boolean; multiplier: number | null }> {
-  return Object.entries(models.providers).map(([id, node]) => ({
-    id,
-    node: structuredClone(node),
-    owned: node.piModelFailover !== undefined,
-    multiplier: node.piModelFailover?.costMultiplier ?? null,
-  }));
+  return Object.entries(models.providers)
+    .filter(([id]) => id !== "failover")
+    .map(([id, node]) => ({
+      id,
+      node: structuredClone(node),
+      owned: node.piModelFailover !== undefined,
+      multiplier: node.piModelFailover?.costMultiplier ?? null,
+    }));
+}
+
+export function syncFailoverVirtualModels(
+  models: ModelsJson,
+  virtualModels: ModelNode[],
+): ModelsJson {
+  const next = clone(models);
+  const current = next.providers.failover;
+
+  if (virtualModels.length === 0) {
+    if (current?.piModelFailoverVirtual) delete next.providers.failover;
+    return next;
+  }
+  if (current !== undefined && current.piModelFailoverVirtual !== true) {
+    throw new Error("The failover provider id is reserved");
+  }
+
+  next.providers.failover = {
+    ...(current ?? {}),
+    name: "Failover",
+    api: FAILOVER_PROVIDER_API,
+    models: virtualModels.map((model) => {
+      const { apiKey: _apiKey, headers: _headers, ...safeModel } = structuredClone(model);
+      return safeModel;
+    }),
+    piModelFailoverVirtual: true,
+  };
+  delete next.providers.failover.apiKey;
+  delete next.providers.failover.baseUrl;
+  delete next.providers.failover.headers;
+  delete next.providers.failover.authHeader;
+  return next;
 }
 
 export function upsertProvider(models: ModelsJson, id: string, node: ProviderNode): ModelsJson {
@@ -77,7 +116,10 @@ export function setMultiplier(models: ModelsJson, id: string, multiplier: number
 
 export function providersWithModel(models: ModelsJson, modelId: string): string[] {
   const matches = Object.entries(models.providers)
-    .filter(([, provider]) => provider.models.some((model) => model.id === modelId))
+    .filter(
+      ([id, provider]) =>
+        id !== "failover" && provider.models.some((model) => model.id === modelId),
+    )
     .map(([id, provider]) => ({
       id,
       owned: provider.piModelFailover !== undefined,

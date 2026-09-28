@@ -18,7 +18,7 @@ const MODEL_PARAMETERS = "modelParameters";
 type Option<T extends string> = { value: T; label: string };
 type QualityKey = "enabled" | "ttft" | "noProgress";
 type QualityChoice = "inherit" | "on" | "off";
-type Registrar = { syncFailover(chains: Chain[], models: ModelsJson): void };
+type Registrar = { syncFailover(chains: Chain[], models: ModelsJson): Promise<void> };
 
 export interface TargetFormOptions {
   config: ConfigStore;
@@ -285,7 +285,7 @@ export class TargetForm implements TabComponent {
         if (Object.keys(override).length === 0) delete target.serverQuality;
         else target.serverQuality = override;
       });
-      this.options.registrar.syncFailover(
+      await this.options.registrar.syncFailover(
         structuredClone(this.options.config.get().chains),
         this.options.models(),
       );
