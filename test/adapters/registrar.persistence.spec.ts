@@ -85,6 +85,6 @@ describe("Registrar failover catalog persistence", () => {
 
     expect(persisted).toEqual([[]]);
     expect(pi.registrations).toEqual([]);
-    expect(pi.removals).toEqual([]);
+    expect(pi.removals).toEqual(["failover"]);
   });
 });

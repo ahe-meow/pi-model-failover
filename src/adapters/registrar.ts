@@ -68,10 +68,11 @@ export class Registrar {
 
     // SAFETY: createFailoverConfig projects complete ModelNodes from the Chain's first Targets.
     const virtualModels = (config.models ?? []) as unknown as ModelNode[];
+    const hasPersistedVirtualProvider = models.providers.failover?.piModelFailoverVirtual === true;
     try {
       await this.persistFailoverModels?.(virtualModels);
       if (virtualModels.length === 0) {
-        if (this.failoverRegistered) {
+        if (this.failoverRegistered || hasPersistedVirtualProvider) {
           this.pi.unregisterProvider("failover");
           this.failoverRegistered = false;
         }
